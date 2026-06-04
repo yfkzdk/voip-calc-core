@@ -3,6 +3,7 @@
 import re
 from dataclasses import dataclass
 from decimal import Decimal
+from typing import Optional
 
 from .money import Money, CNY
 
@@ -52,6 +53,45 @@ _KNOWN_COUNTRY_CODES = frozenset({
     "+992", "+993", "+994", "+995", "+996", "+998",
 })
 
+
+class CountryCodeTrie:
+    """Trie for longest-prefix matching of E.164 country calling codes.
+
+    Supports variable-length codes (2 to N digits) without a hard-coded
+    length cap.  Each insertion walks the code string char by char; the
+    sentinel ``#`` marks a complete country-code terminal.
+    """
+
+    def __init__(self) -> None:
+        self._root: dict[str, dict] = {}
+
+    def insert(self, code: str) -> None:
+        node = self._root
+        for char in code:
+            node = node.setdefault(char, {})
+        node["#"] = code
+
+    def search_longest_prefix(self, phone: str) -> Optional[str]:
+        """Walk *phone* character by character and return the longest
+        registered country-code prefix, or ``None`` if no prefix matches.
+        """
+        node = self._root
+        longest: Optional[str] = None
+        for char in phone:
+            if char not in node:
+                break
+            node = node[char]
+            if "#" in node:
+                longest = node["#"]
+        return longest
+
+
+# Built once at import time — read-only after initialisation.
+_COUNTRY_TRIE = CountryCodeTrie()
+for _code in sorted(_KNOWN_COUNTRY_CODES, key=len):
+    _COUNTRY_TRIE.insert(_code)
+
+
 @dataclass(frozen=True)
 class CountryCode:
     """Country calling code value object.
@@ -86,18 +126,17 @@ class CountryCode:
     def from_phone_number(cls, phone: str) -> "CountryCode":
         """Extract country code from a phone number using longest-prefix match.
 
-        Matches against the ITU-T E.164 country code set.
+        Walks the global CountryCodeTrie to find the longest registered
+        E.164 prefix.  Falls back to a regex extraction for unknown codes
+        so they receive the default rate.
         """
         if not phone.startswith("+"):
             raise InvalidCountryCodeError(
                 f"Phone number must start with '+': '{phone}'"
             )
-        # O(1) prefix lookup: iterate phone prefixes from longest to shortest
-        max_prefix_len = min(4, len(phone))
-        for i in range(max_prefix_len, 1, -1):
-            prefix = phone[:i]
-            if prefix in _KNOWN_COUNTRY_CODES:
-                return cls(prefix)
+        code = _COUNTRY_TRIE.search_longest_prefix(phone)
+        if code is not None:
+            return cls(code)
         match = re.match(r"^\+(\d{1,3})", phone)
         if match:
             return cls(f"+{match.group(1)}")

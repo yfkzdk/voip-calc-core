@@ -26,6 +26,7 @@ class RateCalculator:
 
         if self._night_valley.is_applicable(context.call_time):
             result = discounted - self._night_valley.reduction_amount()
-            return result.at_least(Money(Decimal("0"), CNY))
+        else:
+            result = discounted
 
-        return discounted
+        return result.at_least(Money(Decimal("0"), CNY))
