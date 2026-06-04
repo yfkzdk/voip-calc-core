@@ -11,18 +11,7 @@ from .night_valley import NightValleyDiscount
 
 
 class RateCalculator:
-    """Stateless domain service that calculates the final per-minute rate.
-
-    Pipeline:
-        1. Base rate from callee's country code
-        2. Customer tier discount
-        3. Night valley reduction (if applicable)
-        4. Floor at ¥0.00
-
-    Usage:
-        calc = RateCalculator()
-        rate = calc.calculate(context, customer_tier)
-    """
+    """Stateless domain service: base rate → tier discount → night reduction → floor at ¥0."""
 
     def __init__(self, night_valley: Optional[NightValleyDiscount] = None):
         self._night_valley = night_valley or NightValleyDiscount()
@@ -30,15 +19,6 @@ class RateCalculator:
     def calculate(
         self, context: CallContext, customer_tier: CustomerTier
     ) -> Money:
-        """Calculate the final per-minute rate for a call.
-
-        Args:
-            context: Immutable call details (caller, callee, call_time).
-            customer_tier: Pre-resolved customer identity tier.
-
-        Returns:
-            Money representing the final per-minute rate in CNY.
-        """
         country = CountryCode.from_phone_number(context.callee)
         base_rate = country.base_rate()
 

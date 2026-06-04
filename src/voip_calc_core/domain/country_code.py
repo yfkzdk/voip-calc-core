@@ -13,8 +13,7 @@ class InvalidCountryCodeError(ValueError):
     pass
 
 
-# ITU-T E.164 country calling codes (commonly used set).
-# Used for longest-prefix phone number parsing.
+# ITU-T E.164 country calling codes. Used for longest-prefix phone parsing.
 _KNOWN_COUNTRY_CODES = frozenset({
     "+1", "+7",
     "+20", "+27", "+30", "+31", "+32", "+33", "+34", "+36", "+39",
@@ -52,6 +51,8 @@ _KNOWN_COUNTRY_CODES = frozenset({
     "+977",
     "+992", "+993", "+994", "+995", "+996", "+998",
 })
+
+_SORTED_CODES = sorted(_KNOWN_COUNTRY_CODES, key=len, reverse=True)
 
 
 @dataclass(frozen=True)
@@ -98,12 +99,9 @@ class CountryCode:
             raise InvalidCountryCodeError(
                 f"Phone number must start with '+': '{phone}'"
             )
-        # Longest-prefix match: sort known codes by length descending
-        sorted_codes = sorted(_KNOWN_COUNTRY_CODES, key=len, reverse=True)
-        for prefix in sorted_codes:
+        for prefix in _SORTED_CODES:
             if phone.startswith(prefix):
                 return cls(prefix)
-        # Fallback: extract up to 3 digits as country code
         match = re.match(r"^\+(\d{1,3})", phone)
         if match:
             return cls(f"+{match.group(1)}")
