@@ -110,10 +110,11 @@ RateCalculator:
 ```
 
 - 纯粹、无状态、无副作用。
-- 三步管道：
+- 四步管道：
   1. 从 callee 提取 CountryCode → 查基础费率
-  2. 从 caller 推断 CustomerTier → 应用折扣
+  2. 接收 CustomerTier → 应用折扣率
   3. 检查 call_time 是否在夜间低谷 → 减免固定金额
+  4. 出口守卫 → at_least(¥0.00)
 
 选择理由：费率计算需要跨多个值对象协调，是领域服务（非实体或值对象）的经典场景。
 
