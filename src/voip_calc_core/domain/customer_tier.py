@@ -12,11 +12,7 @@ class TierEnum(Enum):
 
 @dataclass(frozen=True)
 class CustomerTier:
-    """Customer identity tier with associated discount rate.
-
-    VIP    → 0.9 (10% discount, for overseas students / Chinese diaspora)
-    NORMAL → 1.0 (no discount)
-    """
+    """Customer identity tier with associated discount rate."""
 
     tier: TierEnum
 
@@ -26,11 +22,9 @@ class CustomerTier:
     }
 
     def discount_rate(self) -> Decimal:
-        """Return the discount multiplier for this tier."""
         return self._DISCOUNT_RATES[self.tier]
 
     def label(self) -> str:
-        """Return human-readable tier label."""
         return self.tier.value
 
     @classmethod

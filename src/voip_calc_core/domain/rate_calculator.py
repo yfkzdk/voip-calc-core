@@ -6,7 +6,7 @@ from typing import Optional
 from .call_context import CallContext
 from .country_code import CountryCode
 from .customer_tier import CustomerTier
-from .money import Money
+from .money import Money, CNY
 from .night_valley import NightValleyDiscount
 
 
@@ -26,8 +26,6 @@ class RateCalculator:
 
         if self._night_valley.is_applicable(context.call_time):
             result = discounted - self._night_valley.reduction_amount()
-            if result.amount < 0:
-                return Money(Decimal("0"), result.currency)
-            return result
+            return result.at_least(Money(Decimal("0"), CNY))
 
         return discounted

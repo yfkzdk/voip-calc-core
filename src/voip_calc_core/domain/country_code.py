@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass
 from decimal import Decimal
 
-from .money import Money
+from .money import Money, CNY
 
 
 class InvalidCountryCodeError(ValueError):
@@ -52,19 +52,12 @@ _KNOWN_COUNTRY_CODES = frozenset({
     "+992", "+993", "+994", "+995", "+996", "+998",
 })
 
-_SORTED_CODES = sorted(_KNOWN_COUNTRY_CODES, key=len, reverse=True)
-
-
 @dataclass(frozen=True)
 class CountryCode:
     """Country calling code value object.
 
     Format: + followed by digits (e.g., +86, +1, +351).
-
-    Encapsulates the base-rate-per-minute mapping:
-        +86 (China) → ¥0.10
-        +1  (USA)   → ¥0.05
-        other       → ¥0.50 (default)
+    Base rate mapping is defined in _BASE_RATES; unknown codes get _DEFAULT_RATE.
     """
 
     code: str
@@ -87,7 +80,7 @@ class CountryCode:
     def base_rate(self) -> "Money":
         """Return the base per-minute rate for this country."""
         amount = self._BASE_RATES.get(self.code, self._DEFAULT_RATE)
-        return Money(amount, "CNY")
+        return Money(amount, CNY)
 
     @classmethod
     def from_phone_number(cls, phone: str) -> "CountryCode":
@@ -99,8 +92,11 @@ class CountryCode:
             raise InvalidCountryCodeError(
                 f"Phone number must start with '+': '{phone}'"
             )
-        for prefix in _SORTED_CODES:
-            if phone.startswith(prefix):
+        # O(1) prefix lookup: iterate phone prefixes from longest to shortest
+        max_prefix_len = min(4, len(phone))
+        for i in range(max_prefix_len, 1, -1):
+            prefix = phone[:i]
+            if prefix in _KNOWN_COUNTRY_CODES:
                 return cls(prefix)
         match = re.match(r"^\+(\d{1,3})", phone)
         if match:

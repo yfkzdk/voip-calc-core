@@ -4,7 +4,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 
-from .money import Money
+from .money import Money, CNY
 
 
 @dataclass(frozen=True)
@@ -45,4 +45,4 @@ class NightValleyDiscount:
 
     def reduction_amount(self) -> Money:
         """Return the per-minute reduction as a Money value."""
-        return Money(self.reduction, "CNY")
+        return Money(self.reduction, CNY)

@@ -4,6 +4,8 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Union
 
+CNY = "CNY"
+
 
 class MoneyCurrencyMismatchError(TypeError):
     """Raised when arithmetic is attempted across different currencies."""
@@ -13,13 +15,7 @@ class MoneyCurrencyMismatchError(TypeError):
 
 @dataclass(frozen=True)
 class Money:
-    """Immutable monetary value with currency.
-
-    Invariants:
-        - amount is always a Decimal (precision-safe)
-        - same-currency operations only
-        - all operations return new Money instances
-    """
+    """Immutable monetary value. All operations return new instances."""
 
     amount: Decimal
     currency: str
@@ -28,30 +24,35 @@ class Money:
         if not isinstance(self.amount, Decimal):
             object.__setattr__(self, "amount", Decimal(str(self.amount)))
 
+    def _require_same_currency(self, other: "Money") -> None:
+        if self.currency != other.currency:
+            raise MoneyCurrencyMismatchError(
+                f"Currency mismatch: {self.currency} vs {other.currency}."
+            )
+
     def __add__(self, other: "Money") -> "Money":
         if not isinstance(other, Money):
             return NotImplemented
-        if self.currency != other.currency:
-            raise MoneyCurrencyMismatchError(
-                f"Cannot add {self.currency} and {other.currency}: "
-                f"currency must match."
-            )
+        self._require_same_currency(other)
         return Money(self.amount + other.amount, self.currency)
 
     def __sub__(self, other: "Money") -> "Money":
         if not isinstance(other, Money):
             return NotImplemented
-        if self.currency != other.currency:
-            raise MoneyCurrencyMismatchError(
-                f"Cannot subtract {other.currency} from {self.currency}: "
-                f"currency must match."
-            )
+        self._require_same_currency(other)
         return Money(self.amount - other.amount, self.currency)
 
     def __mul__(self, scalar: Union[Decimal, int, float]) -> "Money":
-        if isinstance(scalar, (int, float)):
+        if isinstance(scalar, int):
+            scalar = Decimal(scalar)
+        elif isinstance(scalar, float):
             scalar = Decimal(str(scalar))
         return Money(self.amount * scalar, self.currency)
+
+    def at_least(self, floor: "Money") -> "Money":
+        """Return self or floor, whichever is larger."""
+        self._require_same_currency(floor)
+        return self if self.amount >= floor.amount else floor
 
     def __repr__(self) -> str:
         return f"Money({self.amount}, {self.currency})"
