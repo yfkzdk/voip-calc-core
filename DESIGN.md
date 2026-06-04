@@ -106,7 +106,7 @@ CallContext {
 
 ```
 RateCalculator:
-    calculate(context: CallContext) -> Money
+    calculate(context: CallContext, tier: CustomerTier) -> Money
 ```
 
 - 纯粹、无状态、无副作用。

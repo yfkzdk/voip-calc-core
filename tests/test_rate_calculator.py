@@ -1,7 +1,7 @@
 """Tests for RateCalculator domain service."""
 
 import pytest
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 
 from voip_calc_core.domain.call_context import CallContext
@@ -11,12 +11,15 @@ from voip_calc_core.domain.night_valley import NightValleyDiscount
 from voip_calc_core.domain.rate_calculator import RateCalculator
 
 
+UTC = timezone.utc
+
+
 class TestRateCalculatorDaytime:
     """Rate calculation during daytime (no night valley reduction)."""
 
     @pytest.fixture
     def daytime(self):
-        return datetime(2026, 6, 5, 14, 30, 0)
+        return datetime(2026, 6, 5, 14, 30, 0, tzinfo=UTC)
 
     @pytest.fixture
     def calc(self):
@@ -58,7 +61,7 @@ class TestRateCalculatorNightValley:
 
     @pytest.fixture
     def night_time(self):
-        return datetime(2026, 6, 6, 2, 0, 0)
+        return datetime(2026, 6, 6, 2, 0, 0, tzinfo=UTC)
 
     @pytest.fixture
     def calc(self):
@@ -87,8 +90,6 @@ class TestRateCalculatorFloorAtZero:
     """Final rate never goes below ¥0.00."""
 
     def test_floor_at_zero(self):
-        """With a custom night valley discount large enough to push below zero."""
-        # Use default rates: US + VIP = 0.045, then subtract 0.05 → -0.005 → floor at 0
         aggressive_night = NightValleyDiscount(
             start_hour=23, end_hour=5, reduction=Decimal("0.05")
         )
@@ -96,13 +97,12 @@ class TestRateCalculatorFloorAtZero:
         ctx = CallContext(
             caller="+8613800000001",
             callee="+14150000000",
-            call_time=datetime(2026, 6, 6, 2, 0, 0),
+            call_time=datetime(2026, 6, 6, 2, 0, 0, tzinfo=UTC),
         )
         rate = calc.calculate(ctx, CustomerTier(TierEnum.VIP))
         assert rate == Money(Decimal("0.00"), "CNY")
 
     def test_exactly_zero(self):
-        """Rate that lands exactly at zero stays at zero."""
         exact_night = NightValleyDiscount(
             start_hour=23, end_hour=5, reduction=Decimal("0.045")
         )
@@ -110,7 +110,7 @@ class TestRateCalculatorFloorAtZero:
         ctx = CallContext(
             caller="+8613800000001",
             callee="+14150000000",
-            call_time=datetime(2026, 6, 6, 2, 0, 0),
+            call_time=datetime(2026, 6, 6, 2, 0, 0, tzinfo=UTC),
         )
         rate = calc.calculate(ctx, CustomerTier(TierEnum.VIP))
         assert rate == Money(Decimal("0.00"), "CNY")
@@ -124,13 +124,13 @@ class TestRateCalculatorImmutability:
         ctx = CallContext(
             caller="+8613800000001",
             callee="+8613900000000",
-            call_time=datetime(2026, 6, 5, 14, 30, 0),
+            call_time=datetime(2026, 6, 5, 14, 30, 0, tzinfo=UTC),
         )
         tier = CustomerTier(TierEnum.VIP)
         first = calc.calculate(ctx, tier)
         second = calc.calculate(ctx, tier)
         assert first == second
-        assert first is not second  # Different objects, same value
+        assert first is not second
 
 
 class TestRateCalculatorBoundaryHours:
@@ -144,7 +144,7 @@ class TestRateCalculatorBoundaryHours:
         ctx = CallContext(
             caller="+8613800000001",
             callee="+14150000000",
-            call_time=datetime(2026, 6, 5, 23, 0, 0),
+            call_time=datetime(2026, 6, 5, 23, 0, 0, tzinfo=UTC),
         )
         rate = calc.calculate(ctx, CustomerTier(TierEnum.NORMAL))
         assert rate == Money(Decimal("0.03"), "CNY")
@@ -153,7 +153,27 @@ class TestRateCalculatorBoundaryHours:
         ctx = CallContext(
             caller="+8613800000001",
             callee="+14150000000",
-            call_time=datetime(2026, 6, 5, 5, 0, 0),
+            call_time=datetime(2026, 6, 5, 5, 0, 0, tzinfo=UTC),
         )
         rate = calc.calculate(ctx, CustomerTier(TierEnum.NORMAL))
         assert rate == Money(Decimal("0.05"), "CNY")
+
+
+class TestCallContextValidation:
+    """CallContext enforces timezone-aware datetimes."""
+
+    def test_naive_datetime_raises(self):
+        with pytest.raises(ValueError, match="timezone-aware"):
+            CallContext(
+                caller="+8613800000001",
+                callee="+14150000000",
+                call_time=datetime(2026, 6, 5, 14, 30, 0),
+            )
+
+    def test_aware_datetime_ok(self):
+        ctx = CallContext(
+            caller="+8613800000001",
+            callee="+14150000000",
+            call_time=datetime(2026, 6, 5, 14, 30, 0, tzinfo=UTC),
+        )
+        assert ctx.call_time.tzinfo is not None
