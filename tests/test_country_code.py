@@ -62,3 +62,31 @@ class TestCountryCodeBaseRate:
         cc = CountryCode("+81")
         rate = cc.base_rate()
         assert rate == Money("0.50", "CNY")
+
+
+class TestCountryCodeFromPhoneNumber:
+    """CountryCode can be extracted from international phone numbers."""
+
+    def test_china_phone(self):
+        cc = CountryCode.from_phone_number("+8613800138000")
+        assert cc.code == "+86"
+
+    def test_us_phone(self):
+        cc = CountryCode.from_phone_number("+14155551234")
+        assert cc.code == "+1"
+
+    def test_uk_phone(self):
+        cc = CountryCode.from_phone_number("+442012345678")
+        assert cc.code == "+44"
+
+    def test_portugal_phone(self):
+        cc = CountryCode.from_phone_number("+351912345678")
+        assert cc.code == "+351"
+
+    def test_phone_without_plus_raises(self):
+        with pytest.raises(InvalidCountryCodeError):
+            CountryCode.from_phone_number("8613800138000")
+
+    def test_empty_phone_raises(self):
+        with pytest.raises(InvalidCountryCodeError):
+            CountryCode.from_phone_number("")
