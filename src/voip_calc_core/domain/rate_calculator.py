@@ -16,6 +16,11 @@ class RateCalculator:
     def __init__(self, night_valley: Optional[NightValleyDiscount] = None):
         self._night_valley = night_valley or NightValleyDiscount()
 
+    @property
+    def night_valley(self) -> NightValleyDiscount:
+        """The night-valley discount configuration this calculator uses."""
+        return self._night_valley
+
     def calculate(
         self, context: CallContext, customer_tier: CustomerTier
     ) -> Money:
