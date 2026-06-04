@@ -161,15 +161,26 @@ voip-calc-core/
 │       ├── night_valley.py       # NightValleyDiscount 值对象
 │       ├── call_context.py       # CallContext DTO
 │       └── rate_calculator.py    # RateCalculator 领域服务
+│   └── application/
+│       ├── __init__.py
+│       ├── dto.py                # Request/Response DTO
+│       ├── ports.py              # CustomerProfileFetcher 端口
+│       ├── time_parser.py        # ISO-8601 严格解析
+│       ├── circuit_breaker.py    # 熔断器状态机
+│       └── routing_service.py   # RoutingAppService 编排
 ├── tests/
 │   ├── __init__.py
 │   ├── test_money.py
 │   ├── test_country_code.py
 │   ├── test_customer_tier.py
 │   ├── test_night_valley.py
-│   ├── test_call_context.py
-│   └── test_rate_calculator.py
+│   ├── test_rate_calculator.py
+│   ├── test_time_parser.py
+│   ├── test_circuit_breaker.py
+│   ├── test_application_dto.py
+│   └── test_routing_service.py
 ├── DESIGN.md
+├── APPLICATION_DESIGN.md
 ├── PROMPTS.md
 └── README.md
 ```
