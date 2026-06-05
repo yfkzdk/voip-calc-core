@@ -2,14 +2,23 @@
 
 Implements the standard three-state pattern (CLOSED → OPEN → HALF_OPEN).
 Uses :class:`asyncio.Lock` for async-safe state transitions.
+
+Exception filtering via *exclude* follows the pybreaker convention: excluded
+exceptions are re-raised but do **not** count as failures that could trip
+the circuit.  This prevents business-logic exceptions (e.g. ``ValueError``
+from bad input) from causing a system-level circuit trip.
 """
 
 import asyncio
 import time
 from enum import Enum, auto
-from typing import Any, Callable, Awaitable, Optional, TypeVar
+from typing import Any, Callable, Awaitable, Optional, Sequence, Type, TypeVar, Union
 
 T = TypeVar("T")
+
+# An exclude entry is either an exception *type* or a callable that receives
+# the exception instance and returns ``True`` if it should be excluded.
+ExcludeSpec = Union[Type[Exception], Callable[[Exception], bool]]
 
 
 class CircuitState(Enum):
@@ -29,6 +38,9 @@ class CircuitBreaker:
         failure_threshold: Consecutive failures before tripping to OPEN.
         recovery_timeout: Seconds to wait before transitioning OPEN → HALF_OPEN.
         half_open_probes: Max calls allowed in HALF_OPEN before deciding.
+        exclude: Exception types or predicates that should NOT count as
+            failures.  Business-logic exceptions (``ValueError``, validation
+            errors, etc.) belong here so they don't trip the circuit.
     """
 
     def __init__(
@@ -36,17 +48,19 @@ class CircuitBreaker:
         failure_threshold: int = 5,
         recovery_timeout: float = 30.0,
         half_open_probes: int = 1,
+        exclude: Optional[Sequence[ExcludeSpec]] = None,
     ) -> None:
         if failure_threshold < 1:
             raise ValueError("failure_threshold must be >= 1")
         if recovery_timeout < 0:
-            raise ValueError("recovery_timeout must be > 0")
+            raise ValueError("recovery_timeout must be >= 0")
         if half_open_probes < 1:
             raise ValueError("half_open_probes must be >= 1")
 
         self._failure_threshold = failure_threshold
         self._recovery_timeout = recovery_timeout
         self._half_open_probes = half_open_probes
+        self._exclude: Sequence[ExcludeSpec] = exclude or []
 
         self._state = CircuitState.CLOSED
         self._failure_count = 0
@@ -94,6 +108,9 @@ class CircuitBreaker:
                         f"Retry in {self._recovery_timeout - (now - self._last_failure_time):.1f}s."
                     )
 
+            # HALF_OPEN: only *half_open_probes* calls are allowed through
+            # as probes.  Additional concurrent arrivals are rejected so the
+            # downstream service isn't flooded before the probe result is known.
             if (
                 self._state == CircuitState.HALF_OPEN
                 and self._half_open_attempts >= self._half_open_probes
@@ -110,8 +127,9 @@ class CircuitBreaker:
         # Execute outside the lock so concurrent calls aren't serialised.
         try:
             result = await coro_factory(*args, **kwargs)
-        except Exception:
-            await self._on_failure()
+        except Exception as exc:
+            if not self._is_excluded(exc):
+                await self._on_failure()
             raise
 
         await self._on_success()
@@ -128,6 +146,15 @@ class CircuitBreaker:
             self._last_failure_time = time.monotonic()
             if self._failure_count >= self._failure_threshold:
                 self._state = CircuitState.OPEN
+
+    def _is_excluded(self, exc: Exception) -> bool:
+        """Return ``True`` if *exc* should NOT count as a circuit failure."""
+        for entry in self._exclude:
+            if isinstance(entry, type) and isinstance(exc, entry):
+                return True
+            if callable(entry) and not isinstance(entry, type) and entry(exc):
+                return True
+        return False
 
     async def reset(self) -> None:
         """Force the circuit back to CLOSED (e.g. for testing)."""

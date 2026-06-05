@@ -211,3 +211,102 @@ class TestConcurrency:
         # First call transitions to HALF_OPEN and succeeds
         await cb.call(success)
         assert cb.state == CircuitState.CLOSED
+
+
+class TestExclude:
+    """Business exceptions excluded from failure counting (pybreaker convention)."""
+
+    class BusinessError(Exception):
+        pass
+
+    async def test_excluded_by_type_does_not_count(self):
+        cb = CircuitBreaker(failure_threshold=1, exclude=[ValueError])
+        async def bad_input():
+            raise ValueError("invalid field")
+
+        # ValueError is excluded — should not count as a failure
+        with pytest.raises(ValueError):
+            await cb.call(bad_input)
+        assert cb.state == CircuitState.CLOSED
+        assert cb._failure_count == 0
+
+    async def test_system_error_still_counts_when_exclude_set(self):
+        cb = CircuitBreaker(failure_threshold=1, exclude=[ValueError])
+        async def down():
+            raise RuntimeError("down")
+
+        with pytest.raises(RuntimeError):
+            await cb.call(down)
+        assert cb.state == CircuitState.OPEN
+        assert cb._failure_count == 1
+
+    async def test_excluded_by_callable(self):
+        cb = CircuitBreaker(
+            failure_threshold=1,
+            exclude=[lambda e: isinstance(e, ValueError) and "retry" not in str(e)],
+        )
+        # Ordinary ValueError → excluded
+        async def bad_input():
+            raise ValueError("invalid field")
+
+        with pytest.raises(ValueError):
+            await cb.call(bad_input)
+        assert cb.state == CircuitState.CLOSED
+
+    async def test_not_excluded_by_callable_when_predicate_false(self):
+        cb = CircuitBreaker(
+            failure_threshold=1,
+            exclude=[lambda e: isinstance(e, ValueError) and "retry" not in str(e)],
+        )
+        # ValueError with "retry" in message → NOT excluded → counts
+        async def transient():
+            raise ValueError("retry later")
+
+        with pytest.raises(ValueError):
+            await cb.call(transient)
+        assert cb.state == CircuitState.OPEN
+
+    async def test_exclude_subclass_also_excluded(self):
+        cb = CircuitBreaker(failure_threshold=1, exclude=[self.BusinessError])
+        async def biz_fail():
+            raise self.BusinessError("account banned")
+
+        with pytest.raises(self.BusinessError):
+            await cb.call(biz_fail)
+        assert cb.state == CircuitState.CLOSED
+
+    async def test_multiple_exclude_entries(self):
+        cb = CircuitBreaker(
+            failure_threshold=1,
+            exclude=[ValueError, self.BusinessError, lambda e: isinstance(e, KeyError)],
+        )
+        async def raise_key():
+            raise KeyError("missing")
+
+        with pytest.raises(KeyError):
+            await cb.call(raise_key)
+        assert cb.state == CircuitState.CLOSED
+        assert cb._failure_count == 0
+
+    async def test_exclude_does_not_prevent_real_trip(self):
+        """Excluded exceptions don't reset the failure counter either."""
+        cb = CircuitBreaker(failure_threshold=2, exclude=[ValueError])
+        async def bad_input():
+            raise ValueError("invalid")
+        async def down():
+            raise ConnectionError("refused")
+
+        # ValueError: excluded, doesn't count
+        with pytest.raises(ValueError):
+            await cb.call(bad_input)
+        assert cb._failure_count == 0
+
+        # ConnectionError: counts
+        with pytest.raises(ConnectionError):
+            await cb.call(down)
+        assert cb._failure_count == 1
+
+        # One more ConnectionError → trip
+        with pytest.raises(ConnectionError):
+            await cb.call(down)
+        assert cb.state == CircuitState.OPEN
