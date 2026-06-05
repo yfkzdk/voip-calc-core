@@ -9,9 +9,8 @@ from .money import Money, CNY
 
 
 class InvalidCountryCodeError(ValueError):
-    """Raised when country code format is invalid."""
-
-    pass
+    """Country code format is invalid."""
+    ...
 
 
 # ITU-T E.164 country calling codes. Used for longest-prefix phone parsing.

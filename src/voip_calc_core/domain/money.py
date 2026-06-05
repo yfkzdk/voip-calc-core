@@ -8,9 +8,8 @@ CNY = "CNY"
 
 
 class MoneyCurrencyMismatchError(TypeError):
-    """Raised when arithmetic is attempted across different currencies."""
-
-    pass
+    """Arithmetic attempted across different currencies."""
+    ...
 
 
 @dataclass(frozen=True)

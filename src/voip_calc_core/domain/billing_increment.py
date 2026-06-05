@@ -52,14 +52,12 @@ class BillingIncrement:
         charged = 0
         remaining = actual_seconds
 
-        # First increment — charged in full if any time was spent
         inc = self.initial_seconds
         if remaining > 0:
             used = min(remaining, inc)
             charged += inc
             remaining -= used
 
-        # Subsequent increments
         inc = self.subsequent_seconds
         while remaining > 0:
             used = min(remaining, inc)
