@@ -23,10 +23,9 @@ from voip_calc_core.application.rated_call import RatedCall
 class SqliteCdrRepository(CdrRepository):
     """SQLite-backed CDR repository — development/testing adapter.
 
-    Implements three-layer idempotency:
+    Implements two-layer idempotency:
       1. In-memory :class:`set` of seen keys (O(1), zero I/O)
-      2. ``SELECT`` query (idempotent response replay)
-      3. ``INSERT OR IGNORE`` (database-level dedup)
+      2. ``INSERT OR IGNORE`` (database-level dedup via UNIQUE constraint)
     """
 
     def __init__(self, conn: sqlite3.Connection) -> None:
@@ -44,14 +43,7 @@ class SqliteCdrRepository(CdrRepository):
             return
         self._seen_keys.add(key)
 
-        # Layer 2: database lookup
-        row = self._conn.execute(
-            "SELECT 1 FROM rated_calls WHERE idempotency_key = ?", (key,)
-        ).fetchone()
-        if row is not None:
-            return
-
-        # Layer 3: INSERT OR IGNORE
+        # Layer 2: INSERT OR IGNORE (database-level dedup)
         self._conn.execute(
             """INSERT OR IGNORE INTO rated_calls
                (cdr_id, caller, callee, call_start_time, country_code,
@@ -76,10 +68,7 @@ class SqliteCdrRepository(CdrRepository):
 
     async def find_by_idempotency_key(self, key: str) -> Optional[RatedCall]:
         row = self._conn.execute(
-            """SELECT cdr_id, caller, callee, call_start_time, country_code,
-                      tier, night_valley_applied, amount, currency,
-                      idempotency_key, rated_at
-               FROM rated_calls WHERE idempotency_key = ?""",
+            f"SELECT {_COLUMNS} FROM rated_calls WHERE idempotency_key = ?",
             (key,),
         ).fetchone()
         if row is None:
@@ -90,11 +79,8 @@ class SqliteCdrRepository(CdrRepository):
         self, caller: str, limit: int = 50
     ) -> list[RatedCall]:
         rows = self._conn.execute(
-            """SELECT cdr_id, caller, callee, call_start_time, country_code,
-                      tier, night_valley_applied, amount, currency,
-                      idempotency_key, rated_at
-               FROM rated_calls WHERE caller = ?
-               ORDER BY rated_at DESC LIMIT ?""",
+            f"SELECT {_COLUMNS} FROM rated_calls WHERE caller = ? "
+            "ORDER BY rated_at DESC LIMIT ?",
             (caller, limit),
         ).fetchall()
         return [_row_to_rated_call(r) for r in rows]
@@ -120,23 +106,12 @@ class SqliteUnitOfWork(AbstractUnitOfWork):
 
     async def __aenter__(self) -> "SqliteUnitOfWork":
         self._conn = sqlite3.connect(self._db_path)
-        self._conn.execute("PRAGMA journal_mode=WAL")
         self.cdr_repo = SqliteCdrRepository(self._conn)
         return self
 
     async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
         try:
-            if exc_type is not None:
-                await self.rollback()
-                return
-            try:
-                await self.commit()
-            except BaseException:
-                try:
-                    await self.rollback()
-                except BaseException:
-                    pass
-                raise
+            await super().__aexit__(exc_type, exc_val, exc_tb)
         finally:
             if self._conn is not None:
                 self._conn.close()
@@ -152,6 +127,11 @@ class SqliteUnitOfWork(AbstractUnitOfWork):
 
 
 # ── helpers ────────────────────────────────────────────────────────────
+
+_COLUMNS = (
+    "cdr_id, caller, callee, call_start_time, country_code, "
+    "tier, night_valley_applied, amount, currency, idempotency_key, rated_at"
+)
 
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS rated_calls (

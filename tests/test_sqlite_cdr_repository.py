@@ -4,7 +4,7 @@ Uses temp file database so multiple UoW instances share the same store.
 """
 
 import tempfile
-from datetime import datetime, timezone, timedelta
+from datetime import timedelta
 from decimal import Decimal
 from pathlib import Path
 
@@ -14,7 +14,8 @@ from voip_calc_core.infrastructure.sqlite_cdr_repository import (
     SqliteCdrRepository,
     SqliteUnitOfWork,
 )
-from voip_calc_core.application.rated_call import RatedCall
+
+from .test_cdr_repository import _make_rated_call, UTC, CST
 
 pytestmark = pytest.mark.asyncio
 
@@ -26,29 +27,6 @@ def db_path():
         path = f.name
     yield path
     Path(path).unlink(missing_ok=True)
-
-UTC = timezone.utc
-CST = timezone(timedelta(hours=8))
-
-
-def _make_rated_call(**overrides) -> RatedCall:
-    kwargs = {
-        "cdr_id": "abc123",
-        "caller": "+8613800000001",
-        "callee": "+14150000000",
-        "call_start_time": datetime(2026, 6, 5, 14, 30, 0, tzinfo=CST),
-        "country_code": "+1",
-        "tier": "VIP",
-        "night_valley_applied": False,
-        "amount": Decimal("0.045"),
-        "currency": "CNY",
-        "idempotency_key": "test-key",
-        "rated_at": datetime(2026, 6, 5, 14, 30, 1, tzinfo=UTC),
-    }
-    kwargs.update({k: v for k, v in overrides.items() if k != "amount"})
-    if "amount" in overrides:
-        kwargs["amount"] = Decimal(overrides["amount"])
-    return RatedCall(**kwargs)
 
 
 class TestSqliteCdrRepositorySave:

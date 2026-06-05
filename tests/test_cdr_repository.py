@@ -1,5 +1,7 @@
 """Tests for CdrRepository & AbstractUnitOfWork ports with Fake implementations."""
 
+from datetime import datetime, timezone, timedelta
+from decimal import Decimal
 from typing import Optional
 
 import pytest
@@ -50,6 +52,11 @@ class FakeCdrRepository(CdrRepository):
     async def find_by_caller(self, caller: str, limit: int = 50) -> list[RatedCall]:
         return [rc for rc in self._store.values() if rc.caller == caller][:limit]
 
+    def clear(self) -> None:
+        """Reset all stored data — used by UoW rollback."""
+        self._store.clear()
+        self._seen_keys.clear()
+
 
 class FakeUnitOfWork(AbstractUnitOfWork):
     """In-memory unit of work — commit is a no-op, rollback clears store."""
@@ -65,9 +72,7 @@ class FakeUnitOfWork(AbstractUnitOfWork):
 
     async def rollback(self) -> None:
         self.rolled_back = True
-        # Simulate: clear uncommitted state
-        self._repo._store.clear()
-        self._repo._seen_keys.clear()
+        self._repo.clear()
 
 
 # ── Port ABC tests ────────────────────────────────────────────────────────
@@ -168,9 +173,6 @@ class TestFakeUnitOfWork:
 
 # ── helpers ────────────────────────────────────────────────────────────────
 
-from datetime import datetime, timezone, timedelta
-from decimal import Decimal
-
 UTC = timezone.utc
 CST = timezone(timedelta(hours=8))
 
@@ -189,7 +191,7 @@ def _make_rated_call(**overrides) -> RatedCall:
         "idempotency_key": "test-key",
         "rated_at": datetime(2026, 6, 5, 14, 30, 1, tzinfo=UTC),
     }
-    kwargs.update({k: v for k, v in overrides.items() if k != "amount"})
+    kwargs.update(overrides)
     if "amount" in overrides:
         kwargs["amount"] = Decimal(overrides["amount"])
     return RatedCall(**kwargs)
