@@ -74,62 +74,99 @@
 
 ---
 
-## 对话 4：熔断器 + 时区防线 — 审查驱动的架构硬化
+## 对话 4：熔断器 + 时区防线 — 审查驱动的架构硬化（第一轮）
 
-**开发者输入**（通过审查 Agent 审计报告体现）：
+### Owner 审计指令
 
-> 审查 Agent 对 CircuitBreaker、time_parser、RoutingAppService 进行了深度合规审计，
-> 发现 3 个高优先级隐患并要求 Agent 立即修复。
+> 对 CircuitBreaker、time_parser、RoutingAppService 进行深度合规审计。
+> 推演以下场景：
+> 1. `ValueError` 异常被 `_is_excluded` 处理后是否真的进入熔断计数？
+> 2. ISO-8601 带 microsecond 的合法格式（`2026-06-05T14:30:00.123456+08:00`）是否会被 regex 拒绝？
+> 3. RoutingAppService 默认构造的 CircuitBreaker 是否排除了输入校验异常（ValueError/TypeError）？
+>
+> 发现 3 个高优先级隐患，立即修复。
 
-**审查 Agent 发现的隐患：**
+### 隐患 1：`_is_excluded` 的 `callable` 陷阱
 
-1. **CircuitBreaker `_is_excluded` 逻辑 Bug** — `callable(ValueError)` 返回 `True`，导致 `ValueError` 异常类匹配到 callable 分支，所有业务异常被错误排除出熔断计数。属于经典的 Python `callable` 陷阱。
+**审计指令**：`callable(ValueError)` 返回什么？
 
-2. **time_parser regex `$` 锚点过严** — 阻止了带 microsecond 的合法 ISO-8601 格式（`2026-06-05T14:30:00.123456+08:00`）。
+**AI 初始代码的脆弱性**：`_is_excluded` 在类型匹配之前先检查 `callable(entry)`。Python 中 `callable(ValueError)` 返回 `True`（异常类的构造函数是 callable），因此所有 `ValueError`/`TypeError` 异常类被匹配到 callable 分支——业务异常被错误排除出熔断计数。熔断器在逻辑异常洪水中永不触发，形同虚设。
 
-3. **RoutingAppService 缺少默认 breaker 排除规则** — 未注入 CircuitBreaker 时，构造的默认 breaker 不排除 `ValueError`/`TypeError`，导致输入校验异常被误计为系统故障。
+**AI 响应（提交 `2e65fb1`）**：在 callable 分支增加 `not isinstance(entry, type)` 守卫，类型匹配与谓词匹配严格分岔。`callable(entry) and not isinstance(entry, type)` → 谓词匹配；`isinstance(exc, entry)` → 类型匹配。两条路径不再交叉。
 
-**AI Agent 响应与修复：**
+### 隐患 2：`time_parser` 正则锚点过严
 
-- `_is_excluded` 增加 `not isinstance(entry, type)` 守卫，类型匹配与谓词匹配严格分岔
-- 移除 `$` 锚点，新增 `default_timezone` 参数（pyiso8601 约定）
-- `RoutingAppService.__init__` 自动创建 breaker 时注入 `_DEFAULT_EXCLUDE = (ValueError, TypeError)`
-- 全部修复通过 25 个新增测试验证
+**审计指令**：ISO-8601 的秒部分允许小数秒。当前正则能否解析 `2026-06-05T14:30:00.123456+08:00`？
 
-**Owner 的 AI 主导力体现：** 审查 Agent 不是"提建议"而是"下诊断书"——明确指出代码在何种并发/输入场景下会静默失败，要求 Agent 在理解根因后实施精准修复。
+**AI 初始代码的脆弱性**：正则以 `$` 结尾，阻止带 microsecond 的合法格式进入匹配。Naive datetime 字符串（无时区后缀）被无条件解释为 UTC，而 pyiso8601 约定中 naive datetime 应允许调用方指定 `default_timezone`。
+
+**AI 响应（提交 `2e65fb1`）**：移除 `$` 锚点，新增 `default_timezone` 参数（遵循 pyiso8601 约定），naive datetime 在指定时区下被解释为该时区的本地时间而非 UTC。
+
+### 隐患 3：`RoutingAppService` 默认熔断器缺少排除规则
+
+**审计指令**：当调用方不注入 CircuitBreaker 时，`__init__` 构造的默认 breaker 是否排除了 `ValueError`/`TypeError`？
+
+**AI 初始代码的脆弱性**：默认 breaker 未注入 `exclude` 参数，输入校验异常（如无效电话号码 → `InvalidCountryCodeError(ValueError)`）被误计为系统故障，3 次无效输入即可触发熔断，阻塞所有后续合法呼叫。
+
+**AI 响应（提交 `2e65fb1`）**：`__init__` 自动创建 breaker 时注入 `_DEFAULT_EXCLUDE = (ValueError, TypeError)`，输入校验异常永不被计入熔断计数。
+
+**全部修复通过 25 个新增测试验证，零回归。**
 
 ---
 
 ## 对话 5：CDR 持久化上下文 — 审查驱动的架构硬化（第二轮）
 
-**开发者输入**（通过审查 Agent 审计报告体现）：
+### Owner 审计指令
 
-> 在 PERSISTENCE_DESIGN.md 和 SQLite 持久化适配器实现后，审查 Agent 进行第二轮深度审计，
-> 发现 4 个持久化层的隐患并要求 Agent 立即修复。
+> 在 PERSISTENCE_DESIGN.md 和 SQLite 持久化适配器实现后，进行第二轮深度审计。
+> 推演以下场景：
+> 1. 两个并发请求携带相同 `idempotency_key`——`save()` 的 SELECT + INSERT 之间有无竞态窗口？
+> 2. SQL 列清单在 INSERT + 2 个 SELECT 中重复书写——改一处是否可能漏改？
+> 3. `SqliteUnitOfWork.__aexit__` 复制基类逻辑——基类 commit/rollback 变更后子类是否偏离？
+> 4. `FakeUnitOfWork.rollback()` 直接操作 `_repo._store.clear()` + `_repo._seen_keys.clear()`——封装是否被打破？
+> 5. `_make_rated_call` 在 `test_cdr_repository.py` 和 `test_sqlite_cdr_repository.py` 重复定义——两份拷贝的行为是否一致？
+> 6. `_seen_keys: set` 在长生命周期进程中有无内存泄漏？
+>
+> 发现 6 个隐患，立即修复。
 
-**审查 Agent 发现的隐患（第二轮）：**
+### 隐患 1：TOCTOU 竞态条件（P0）
 
-1. **TOCTOU 竞态条件** — `SqliteCdrRepository.save()` 的 Layer 2 SELECT 与 Layer 3 INSERT 之间存在时间窗口，并发 writer 可能同时通过 SELECT 检查。`INSERT OR IGNORE` 虽能防御但 SELECT 是冗余的数据库往返。
+**审计指令**：两个并发 writer 同时调用 `save()`，都通过了 Layer 2 SELECT 检查（`idempotency_key` 不在表中），然后同时执行 Layer 3 INSERT。会发生什么？
 
-2. **SQL 列清单重复 3 次** — 11 列投影在 INSERT + 2 个 SELECT 中各写一次，改一处漏一处。
+**AI 初始代码的脆弱性**：3 层幂等看似坚固——内存 set → SELECT 预检 → INSERT OR IGNORE。但中间的 SELECT 是纯冗余的数据库往返：在并发场景下，两个 writer 可能同时通过 SELECT（都发现 key 不存在），然后其中一个的 INSERT 被 `INSERT OR IGNORE` 静默吞掉——无异常、无日志、无重试。TOCTOU 在 SQLite 序列化写锁下概率极低但不为零，在 WAL 模式下窗口更宽。
 
-3. **`SqliteUnitOfWork.__aexit__` 复制基类逻辑** — 18 行 commit/rollback 逻辑与 `AbstractUnitOfWork.__aexit__` 完全相同，仅多 `conn.close()`。若基类逻辑变更，子类会悄然偏离。
+**AI 响应（提交 `1428aba`）**：冷酷删除 Layer 2 SELECT。内存 set 提供单 UoW 内的 O(1) 去重，`INSERT OR IGNORE` + UNIQUE 约束提供跨 UoW 的原子去重。两层各司其职，无竞态窗口。
 
-4. **`FakeUnitOfWork` 跨类访问私有属性** — `self._repo._store.clear()` 和 `self._repo._seen_keys.clear()` 打破了封装。
+### 隐患 2：SQL 列清单重复 3 次（P1）
 
-5. **`_make_rated_call` 测试 helper 在两个文件重复定义** — 含相同的 amount 覆盖 workaround，默认值略有不同但无实际影响。
+**AI 初始代码**：11 列投影在 INSERT 和 2 个 SELECT 中各写一次。添加一列需要改 3 处，漏一处 = 静默数据丢失。
 
-6. **`_seen_keys: set` 无界增长** — 长生命周期进程的潜在内存泄漏。
+**AI 响应（提交 `1428aba`）**：提取 `_COLUMNS` 模块常量，定义一次，3 处引用。
 
-**AI Agent 响应与修复（提交 `1428aba`）：**
+### 隐患 3：`__aexit__` 复制基类逻辑（P1）
 
-- **冷酷删除 Layer 2 SELECT**：`INSERT OR IGNORE` 配合 `UNIQUE(idempotency_key)` 已提供无可辩驳的原子去重保证
-- **提取 `_COLUMNS` 常量**：定义一次，3 处引用
-- **`__aexit__` 委托给 `super()`**：18 行 → 5 行，原始异常保留路径完全依赖基类
-- **`FakeCdrRepository.clear()` 公共方法**：替代私有属性直接操作
-- **测试 helper 去重**：`_make_rated_call` + `UTC`/`CST` 从 `test_cdr_repository.py` 共享导入
-- **简化 amount override 模式**：`kwargs.update(overrides)` 替代过滤式 comprehension
-- **PEP 8 导入位置修正**：`datetime`/`Decimal` 导入从文件底部移至顶部
-- 全部修复通过 184 个测试验证，零回归
+**审计指令**：`SqliteUnitOfWork.__aexit__` 的 18 行 commit/rollback 逻辑与基类有何区别？如果基类的异常保留路径被修复，子类的拷贝是否同步？
 
-**Owner 的 AI 主导力体现：** 这是第二轮审查——第一轮修复了应用层逻辑（熔断器、时区），第二轮直击持久化层的并发安全与代码重复。Owner 对 TOCTOU、幂等原子性、上下文管理器异常传播路径的分布式系统直觉，将 AI 的"能跑"代码打磨为"在高并发下永不静默失败"的生产级底座。每一轮审查不是"看看代码哪里写得不好"，而是"推演这段代码在 175k calls/s、SQLite 写锁序列化、异步 event loop 阻塞的三重压力下会在哪个微秒崩溃"。
+**AI 初始代码**：完整复制 `AbstractUnitOfWork.__aexit__` 的 18 行，仅尾部多一行 `conn.close()`。
+
+**AI 响应（提交 `1428aba`）**：重构为 5 行——`try: await super().__aexit__(...) finally: conn.close()`。确保当 `commit()` 发生底层 I/O 故障时，原始异常原封不动向上传递（不被 rollback 期间的二次异常掩埋），上游 CircuitBreaker 能精准捕捉系统级故障并作出正确熔断决策。
+
+### 隐患 4：`FakeUnitOfWork` 跨类访问私有属性（P1）
+
+**AI 初始代码**：`FakeUnitOfWork.rollback()` 直接操作 `self._repo._store.clear()` 和 `self._repo._seen_keys.clear()`——跨类访问私有属性，打破封装。
+
+**AI 响应（提交 `1428aba`）**：`FakeCdrRepository` 新增 `clear()` 公共方法，`FakeUnitOfWork.rollback()` 调用 `self._repo.clear()`。
+
+### 隐患 5：测试 helper 在两个文件重复定义（P2）
+
+**AI 初始代码**：`_make_rated_call` + `UTC`/`CST` 在 `test_cdr_repository.py` 和 `test_sqlite_cdr_repository.py` 各有一份，含相同的 amount 覆盖 workaround。
+
+**AI 响应（提交 `1428aba`）**：`test_sqlite_cdr_repository.py` 从 `test_cdr_repository.py` 共享导入，单一数据源。
+
+### 隐患 6：`_seen_keys: set` 无界增长（P2）
+
+**AI 响应与退避**：在当前单进程开发/测试场景下，`_seen_keys` 的生命周期绑定于单个 UoW（`async with` 块结束时 repo 随 conn 一起被 GC），无实质泄漏。**但在长生命周期进程中（如服务常驻内存的 FastAPI worker）确实存在无界增长风险**。写入 ADR 债务记录，生产环境切换至 Redis 适配器时通过 TTL 或 LRU 淘汰策略解决，不在 SQLite 适配器中增加复杂度。
+
+---
+
+**Owner 的 AI 主导力体现（两轮审计总结）**：第一轮修复了应用层逻辑（熔断器 callable 陷阱、时区解析器正则、默认 breaker 排除），第二轮直击持久化层的并发安全与代码重复。Owner 对 TOCTOU、幂等原子性、上下文管理器异常传播路径的分布式系统直觉，将 AI 的"能跑"代码打磨为"在高并发下永不静默失败"的生产级底座。每一轮审查不是"看看代码哪里写得不好"，而是"推演这段代码在 175k calls/s、SQLite 写锁序列化、异步 event loop 阻塞的三重压力下会在哪个微秒崩溃"。

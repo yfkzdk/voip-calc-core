@@ -44,7 +44,7 @@ Money { amount: Decimal, currency: str }
 - 乘法允许与标量（Decimal/int/float）相乘，用于折扣计算。
 - 减法结果若为负数，由调用方决定是否截断为 0（非 Money 自身职责）。
 
-选择理由：消除原始类型迷恋（Primitive Obsession）。Decimal 而非 float 保证精度。
+决策权衡：Decimal 是唯一可接受的表示——float 在累加折扣和减免时精度不可预测，int（分为单位）在国内场景尚可但在多币种跨境场景下因各币种精度不一而崩溃。`__mul__` 接受 int/float 时强制 `Decimal(str(scalar))` 转换，拒绝隐式二进制浮点混入。
 
 ### 2.2 CountryCode — 国家代码值对象
 
@@ -59,7 +59,7 @@ CountryCode { code: str }
   - "+1"  (美国) → ¥0.05/分钟
   - 其他   → ¥0.50/分钟（默认）
 
-选择理由：将国家代码与费率知识绑定，避免散落在计算逻辑中的 if-else。
+决策权衡：国家代码与基础费率的绑定是刻意耦合——费率表从业务视角天然以国家为维度划分，拆成独立配置表只是增加一层间接且引入配置漂移风险。`from_phone_number()` 使用 E.164 全集进行最长前缀匹配，而非前 N 位硬编码推断——1-3 位变长国家代码下，简单前缀匹配会错误地将 +44 呼叫误判为 +442 或反之。
 
 ### 2.3 CustomerTier — 客户身份值对象
 
@@ -73,7 +73,7 @@ TierEnum { VIP, NORMAL }
   - VIP    → 0.9 (9折)
   - NORMAL → 1.0 (无折扣)
 
-选择理由：折扣率是 CustomerTier 的内在知识，不是外部注入的配置。
+决策权衡：`CustomerTier` 作为独立参数传入 `calculate()`，而非作为 `CallContext` 字段。原因是 tier 由外部账户系统（CustomerProfileFetcher 端口）反查得出，不是通话本身的属性。将其塞入 CallContext 会模糊应用层（反查与降级）和领域层（纯计算）之间的边界，导致测试时需要构造假账户数据来满足 CallContext。
 
 ### 2.4 NightValleyDiscount — 夜间低谷折扣值对象
 
@@ -86,7 +86,7 @@ NightValleyDiscount { start_hour: int, end_hour: int, reduction: Money }
 - 夜间定义：23:00 ~ 次日 05:00
 - 减免金额：¥0.02/分钟
 
-选择理由：时段逻辑内聚在值对象内部，RateCalculator 只问"是否适用"。
+决策权衡：时段检测逻辑内聚在值对象内部，`RateCalculator` 只问"是否适用"——这消除了计算流程中的 if-else 分支。跨午夜时段判断（`hour >= 23 or hour < 5`）而非简单的区间比较，这在本对象内处理，不泄露到调用方。`NightValleyDiscount` 作为可注入依赖传入 `RateCalculator.__init__`，测试可替换自定义折扣策略（如 floor-at-zero 边界场景），而生产代码保持默认零配置。
 
 ### 2.5 CallContext — 通话上下文 (输入 DTO)
 
@@ -101,7 +101,7 @@ CallContext {
 - 不可变数据传输对象。
 - callee 前缀用于提取国家代码。
 
-选择理由：输入模型与计算逻辑解耦。未来扩展（如添加 call_duration）不影响领域服务接口。
+决策权衡：`frozen=True` 不可变——通话上下文一旦创建不可被计算链上任何环节修改，防止副作用。输入模型与计算逻辑解耦：未来 `CallContext` 扩展（如 `call_duration`、`quality_score`）不影响 `RateCalculator` 接口，反之亦然。
 
 ### 2.6 RateCalculator — 费率计算器 (领域服务)
 
@@ -117,7 +117,7 @@ RateCalculator:
   3. 检查 call_time 是否在夜间低谷 → 减免固定金额
   4. 出口守卫 → at_least(¥0.00)
 
-选择理由：费率计算需要跨多个值对象协调，是领域服务（非实体或值对象）的经典场景。
+决策权衡：当前 3 条规则使用硬编码管道而非策略模式——策略模式在 3 条规则规模下是过度设计，增加抽象层级却无实际收益。ADR-3 明确约定：规则增至 5+ 条时重构为 `Pipeline<Rule>`。出口守卫 `at_least(Money.zero())` 是最后防线——三条规则叠加后可能出现负值（如极端的折扣 + 减免场景），必须硬截断为 ¥0.00，这是一个不可商量的不变式。
 
 ## 3. 架构决策记录 (ADR)
 
