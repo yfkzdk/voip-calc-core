@@ -1,13 +1,14 @@
 """RoutingAppService — application facade for the VoIP rate calculation pipeline.
 
-Orchestrates the four-step pipeline:
+Orchestrates a five-step pipeline:
   1. Parse ISO-8601 string → aware UTC datetime
   2. Resolve caller tier via external port (with circuit breaker + degradation)
   3. Build domain CallContext
-  4. Delegate to RateCalculator, wrap response DTO
+  4. Delegate to RateCalculator
+  5. Persist RatedCall via UnitOfWork (optional — skipped when no factory provided)
 """
 
-from typing import Optional, Sequence, Type
+from typing import Callable, Optional, Sequence, Type
 
 from voip_calc_core.domain.call_context import CallContext
 from voip_calc_core.domain.country_code import CountryCode
@@ -16,7 +17,8 @@ from voip_calc_core.domain.rate_calculator import RateCalculator
 
 from .circuit_breaker import CircuitBreaker, ExcludeSpec
 from .dto import CalculateRateRequest, CalculateRateResponse
-from .ports import CustomerProfileFetcher
+from .ports import AbstractUnitOfWork, CustomerProfileFetcher
+from .rated_call import RatedCall
 from .time_parser import parse_iso8601_to_utc
 
 # Business-logic exceptions that should NOT count as circuit failures.
@@ -42,9 +44,11 @@ class RoutingAppService:
         profile_fetcher: CustomerProfileFetcher,
         circuit_breaker: Optional[CircuitBreaker] = None,
         breaker_exclude: Optional[Sequence[ExcludeSpec]] = None,
+        unit_of_work_factory: Optional[Callable[[], AbstractUnitOfWork]] = None,
     ) -> None:
         self._calculator = calculator
         self._fetcher = profile_fetcher
+        self._uow_factory = unit_of_work_factory
         if circuit_breaker is not None:
             self._breaker = circuit_breaker
         else:
@@ -69,14 +73,31 @@ class RoutingAppService:
             call_time=call_time,
         )
         money = self._calculator.calculate(ctx, tier)
+        night_valley = self._calculator.night_valley.is_applicable(call_time)
+
+        # Step 5: persist CDR (skipped when no UoW factory provided)
+        if self._uow_factory is not None:
+            rated_call = RatedCall.create(
+                caller=request.caller,
+                callee=request.callee,
+                call_start_time=call_time,
+                country_code=country.code,
+                tier=tier.label(),
+                night_valley_applied=night_valley,
+                amount=money.amount,
+                currency=money.currency,
+                idempotency_key=request.idempotency_key,
+            )
+            async with self._uow_factory() as uow:
+                await uow.cdr_repo.save(rated_call)
+                await uow.commit()
+
         return CalculateRateResponse(
             amount=money.amount,
             currency=money.currency,
             country_code=country.code,
             tier=tier.label(),
-            night_valley_applied=self._calculator.night_valley.is_applicable(
-                call_time
-            ),
+            night_valley_applied=night_valley,
             idempotency_key=request.idempotency_key,
         )
 

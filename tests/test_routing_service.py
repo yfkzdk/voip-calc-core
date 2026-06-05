@@ -10,6 +10,9 @@ from voip_calc_core.application.circuit_breaker import CircuitBreaker, CircuitSt
 from voip_calc_core.application.dto import CalculateRateRequest, CalculateRateResponse
 from voip_calc_core.application.ports import CustomerProfileFetcher
 from voip_calc_core.application.routing_service import RoutingAppService
+from voip_calc_core.application.rated_call import RatedCall
+
+from .test_cdr_repository import FakeCdrRepository, FakeUnitOfWork
 
 pytestmark = pytest.mark.asyncio
 
@@ -211,3 +214,89 @@ class TestRoutingAppServiceDefaultExclude:
         for i in range(5):
             await service.execute(build_request(idempotency_key=f"k{i}"))
         assert service._breaker.state == CircuitState.OPEN
+
+
+class TestRoutingAppServicePersistence:
+    """Integration tests for the persistence step (step 5) in the pipeline."""
+
+    async def test_persists_rated_call_when_factory_provided(self):
+        """When a UoW factory is injected, execute() persists a RatedCall."""
+        repo = FakeCdrRepository()
+        def uow_factory():
+            return FakeUnitOfWork(repo=repo)
+
+        service = RoutingAppService(
+            calculator=RateCalculator(),
+            profile_fetcher=FakeFetcher({"+8613800000001": CustomerTier(TierEnum.VIP)}),
+            circuit_breaker=CircuitBreaker(),
+            unit_of_work_factory=uow_factory,
+        )
+        response = await service.execute(build_request())
+        assert response.amount == Decimal("0.045")
+        assert repo.save_count == 1
+
+    async def test_persisted_record_has_correct_data(self):
+        """The persisted RatedCall matches the calculated response."""
+        repo = FakeCdrRepository()
+        def uow_factory():
+            return FakeUnitOfWork(repo=repo)
+
+        service = RoutingAppService(
+            calculator=RateCalculator(),
+            profile_fetcher=FakeFetcher({"+8613800000001": CustomerTier(TierEnum.VIP)}),
+            circuit_breaker=CircuitBreaker(),
+            unit_of_work_factory=uow_factory,
+        )
+        await service.execute(build_request(idempotency_key="k1"))
+
+        found = await repo.find_by_idempotency_key("k1")
+        assert found is not None
+        assert found.caller == "+8613800000001"
+        assert found.callee == "+14150000000"
+        assert found.amount == Decimal("0.045")
+        assert found.tier == "VIP"
+        assert found.country_code == "+1"
+        assert found.currency == "CNY"
+
+    async def test_idempotency_key_dedup(self):
+        """Multiple calls with the same idempotency_key persist only once."""
+        repo = FakeCdrRepository()
+        def uow_factory():
+            return FakeUnitOfWork(repo=repo)
+
+        service = RoutingAppService(
+            calculator=RateCalculator(),
+            profile_fetcher=FakeFetcher({"+8613800000001": CustomerTier(TierEnum.VIP)}),
+            circuit_breaker=CircuitBreaker(),
+            unit_of_work_factory=uow_factory,
+        )
+        await service.execute(build_request(idempotency_key="dup-key"))
+        await service.execute(build_request(idempotency_key="dup-key"))
+        assert repo.save_count == 1
+
+    async def test_no_persistence_when_factory_not_provided(self):
+        """Existing behavior: when no UoW factory, persistence is skipped."""
+        service = RoutingAppService(
+            calculator=RateCalculator(),
+            profile_fetcher=FakeFetcher({"+8613800000001": CustomerTier(TierEnum.VIP)}),
+            circuit_breaker=CircuitBreaker(),
+        )
+        response = await service.execute(build_request())
+        assert response.amount == Decimal("0.045")  # still works
+
+    async def test_persistence_happens_per_call(self):
+        """Each execute() call with a unique key persists a new record."""
+        repo = FakeCdrRepository()
+        def uow_factory():
+            return FakeUnitOfWork(repo=repo)
+
+        service = RoutingAppService(
+            calculator=RateCalculator(),
+            profile_fetcher=FakeFetcher(),
+            circuit_breaker=CircuitBreaker(),
+            unit_of_work_factory=uow_factory,
+        )
+        await service.execute(build_request(idempotency_key="a"))
+        await service.execute(build_request(idempotency_key="b"))
+        await service.execute(build_request(idempotency_key="c"))
+        assert repo.save_count == 3
