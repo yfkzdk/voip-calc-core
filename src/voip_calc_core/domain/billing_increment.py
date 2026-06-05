@@ -5,7 +5,6 @@ rate is applied to *chargeable* duration (rounded up to the configured
 increment), not raw wall-clock seconds.
 """
 
-import math
 from dataclasses import dataclass, field
 from typing import ClassVar
 
