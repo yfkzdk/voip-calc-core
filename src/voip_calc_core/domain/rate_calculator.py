@@ -3,9 +3,11 @@
 from decimal import Decimal
 from typing import Optional
 
+from .billing_increment import BillingIncrement
 from .call_context import CallContext
 from .country_code import CountryCode
 from .customer_tier import CustomerTier
+from .duration import Duration
 from .money import Money, CNY
 from .night_valley import NightValleyDiscount
 
@@ -35,3 +37,30 @@ class RateCalculator:
             result = discounted
 
         return result.at_least(Money(Decimal("0"), CNY))
+
+    def calculate_charge(
+        self,
+        context: CallContext,
+        customer_tier: CustomerTier,
+        duration: Duration,
+        billing: Optional[BillingIncrement] = None,
+    ) -> Money:
+        """Return the **total charge** for a call of *duration* seconds.
+
+        Pipeline::
+
+            per-minute rate (calculate)
+              → chargeable seconds (billing increment ceiling)
+              → raw charge = rate × (chargeable / 60)
+              → round to cents (CNY precision, ROUND_HALF_UP)
+
+        *billing* defaults to 60/60 (whole-minute ceiling) when ``None``.
+        """
+        if billing is None:
+            billing = BillingIncrement.PER_MINUTE
+
+        per_minute_rate = self.calculate(context, customer_tier)
+        chargeable_seconds = billing.chargeable_duration(duration.seconds)
+        chargeable_minutes = Decimal(chargeable_seconds) / Decimal("60")
+        raw_charge = per_minute_rate * chargeable_minutes
+        return raw_charge.round_to_cents()

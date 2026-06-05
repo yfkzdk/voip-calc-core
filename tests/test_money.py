@@ -107,3 +107,36 @@ class TestMoneyRepr:
     def test_repr(self):
         money = Money(Decimal("0.10"), "CNY")
         assert repr(money) == "Money(0.10, CNY)"
+
+
+class TestMoneyRoundToCents:
+    """Money.round_to_cents() quantizes to 2dp with ROUND_HALF_UP."""
+
+    def test_exact_cent_no_change(self):
+        m = Money(Decimal("0.10"), "CNY")
+        assert m.round_to_cents() == Money(Decimal("0.10"), "CNY")
+
+    def test_half_up_rounds_up(self):
+        m = Money(Decimal("0.045"), "CNY")
+        assert m.round_to_cents() == Money(Decimal("0.05"), "CNY")
+
+    def test_half_down_rounds_down(self):
+        m = Money(Decimal("0.044"), "CNY")
+        assert m.round_to_cents() == Money(Decimal("0.04"), "CNY")
+
+    def test_exact_half_rounds_up(self):
+        m = Money(Decimal("0.025"), "CNY")
+        assert m.round_to_cents() == Money(Decimal("0.03"), "CNY")
+
+    def test_zero(self):
+        m = Money(Decimal("0.00"), "CNY")
+        assert m.round_to_cents() == Money(Decimal("0.00"), "CNY")
+
+    def test_high_precision(self):
+        m = Money(Decimal("0.1575"), "CNY")
+        assert m.round_to_cents() == Money(Decimal("0.16"), "CNY")
+
+    def test_original_unchanged(self):
+        m = Money(Decimal("0.045"), "CNY")
+        _ = m.round_to_cents()
+        assert m.amount == Decimal("0.045")

@@ -1,7 +1,7 @@
 """Money value object. Immutable, same-currency invariant, Decimal precision."""
 
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Union
 
 CNY = "CNY"
@@ -53,6 +53,15 @@ class Money:
         """Return self or floor, whichever is larger."""
         self._require_same_currency(floor)
         return self if self.amount >= floor.amount else floor
+
+    def round_to_cents(self) -> "Money":
+        """Round to 2 decimal places using ROUND_HALF_UP (banker-neutral consumer rounding).
+
+        Telecom billing convention: compute at high precision, round only at
+        the final charge boundary.  CNY has ISO-4217 exponent 2.
+        """
+        rounded = self.amount.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        return Money(rounded, self.currency)
 
     def __repr__(self) -> str:
         return f"Money({self.amount}, {self.currency})"
