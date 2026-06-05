@@ -16,6 +16,14 @@ class CalculateRateRequest:
     All datetime values arrive as strings to avoid implicit coercion
     by framework JSON deserializers.  The application service is
     responsible for parsing and validating them.
+
+    .. important::
+       ``call_start_time`` **must** carry an explicit timezone offset
+       (e.g. ``+08:00``, ``-05:00``, ``Z``).  If a naive string is
+       supplied (no offset), the parser will reject it — unless the
+       application service is configured with a *default_timezone*,
+       in which case the naive datetime is interpreted as local time
+       in that timezone, **not** as UTC.
     """
 
     caller: str
