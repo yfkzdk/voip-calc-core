@@ -27,8 +27,9 @@
 └─────────────────────────────────────────────┘
 ```
 
-本上下文职责单一：给定一次通话的基础信息，计算出最终每分钟单价。
-不涉及路由、不涉及 CDR 持久化、不涉及账户余额扣减。
+本上下文职责单一：给定一次通话的基础信息，计算出最终每分钟单价，
+并原子持久化 CDR（Call Detail Record）审计记录。
+不涉及路由、不涉及账户余额扣减。
 
 ## 2. 领域模型 (Domain Model)
 
@@ -164,10 +165,14 @@ voip-calc-core/
 │   └── application/
 │       ├── __init__.py
 │       ├── dto.py                # Request/Response DTO
-│       ├── ports.py              # CustomerProfileFetcher 端口
+│       ├── ports.py              # CustomerProfileFetcher / CdrRepository / UoW
+│       ├── rated_call.py         # RatedCall PO (持久化数据对象)
 │       ├── time_parser.py        # ISO-8601 严格解析
 │       ├── circuit_breaker.py    # 熔断器状态机
-│       └── routing_service.py   # RoutingAppService 编排
+│       └── routing_service.py   # RoutingAppService 编排 (5步管道)
+│   └── infrastructure/
+│       ├── __init__.py
+│       └── sqlite_cdr_repository.py  # SQLite 持久化适配器
 ├── tests/
 │   ├── __init__.py
 │   ├── test_money.py
@@ -178,9 +183,13 @@ voip-calc-core/
 │   ├── test_time_parser.py
 │   ├── test_circuit_breaker.py
 │   ├── test_application_dto.py
-│   └── test_routing_service.py
+│   ├── test_routing_service.py
+│   ├── test_rated_call.py
+│   ├── test_cdr_repository.py
+│   └── test_sqlite_cdr_repository.py
 ├── DESIGN.md
 ├── APPLICATION_DESIGN.md
+├── PERSISTENCE_DESIGN.md
 ├── PROMPTS.md
 └── README.md
 ```

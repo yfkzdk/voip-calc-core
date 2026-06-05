@@ -68,6 +68,7 @@ Money 的加减运算强制同币种检查。跨币种运算抛出 `MoneyCurrenc
 代码自注释。注释仅出现在非显而易见的逻辑处：
 - 跨午夜时间范围判断（`hour >= start OR hour < end`）
 - floor-at-zero 边界处理
+- `_is_excluded` 中 `not isinstance(entry, type)` 守卫——防止异常类被误判为 callable
 
 其余位置通过命名表意，不写冗余注释。
 
@@ -85,21 +86,56 @@ Money 的加减运算强制同币种检查。跨币种运算抛出 `MoneyCurrenc
 - 边界条件（23:00 / 05:00 精确边界、floor-at-zero）
 - 不可变性验证（操作后原始对象不变）
 
-69 个测试，0 个失败。
+184 个测试，0 个失败，1.02s 全绿。
 
 ### 10. 原子化提交历史
 
-6 个 commit，每个对应一个独立的价值增量：
+每个 commit 对应一个独立的价值增量，拒绝大单提交。
 
-```
-cbe4c11 feat(money): add immutable Money value object
-629a921 feat(country-code): add CountryCode value object
-d7b0141 feat(customer-tier): add CustomerTier value object
-b226216 feat(night-valley): add NightValleyDiscount value object
-514bf69 feat(country-code): add from_phone_number parsing
-c7f06ca feat(rate-calculator): add CallContext and RateCalculator
-35983f7 refactor: pre-compute sorted codes, trim docstring noise
-```
+### 11. AI 审查闭环 — 三态熔断器排除参数 Bug
+
+**AI 初始生成的代码：** `_is_excluded` 中 `callable(entry)` 检测先于 `isinstance(entry, type)`，
+导致 `ValueError` 等异常类被判定为 callable（`callable(ValueError)` 返回 `True`），
+所有业务异常错误地被排除出熔断计数。
+
+**Owner 审查发现并修复：** 在 callable 分支增加 `not isinstance(entry, type)` 守卫，
+类型匹配与谓词匹配严格分岔。见 [circuit_breaker.py:152-156](src/voip_calc_core/application/circuit_breaker.py#L152-L156)。
+
+### 12. AI 审查闭环 — 时间解析器的默认时区注入
+
+**AI 初始生成的代码：** `parse_iso8601_to_utc()` 的 regex 以 `$` 结尾，
+阻止了带 microsecond 的合法格式；且不支持 naive 字符串的 `default_timezone` 贴签。
+
+**Owner 审查发现并修复：** 移除 `$` 锚点，新增 `default_timezone` 参数（遵循 pyiso8601 约定），
+naive datetime 在指定时区下被解释为该时区的本地时间而非 UTC。
+见 [time_parser.py](src/voip_calc_core/application/time_parser.py)。
+
+### 13. AI 审查闭环 — 持久化去重的 TOCTOU 竞态条件消除
+
+**AI 初始生成的代码：** `SqliteCdrRepository.save()` 实现 3 层幂等——内存 set + SELECT 预检 + INSERT OR IGNORE。
+中间的 SELECT 在并发场景下存在 TOCTOU 窗口：两个 writer 可能同时通过 SELECT 检查，
+然后其中一个的 INSERT 被 `INSERT OR IGNORE` 静默吞掉。
+
+**Owner 审查发现并修复：** 冷酷删除 Layer 2 SELECT，将去重逻辑内聚为一次原子数据库操作。
+`idempotency_key` 列上的 UNIQUE 约束已提供无可辩驳的去重保证。
+见 [sqlite_cdr_repository.py:39-68](src/voip_calc_core/infrastructure/sqlite_cdr_repository.py#L39-L68)。
+
+### 14. AI 审查闭环 — 上下文管理器的异常安全性
+
+**AI 初始生成的代码：** `SqliteUnitOfWork.__aexit__` 完整复制了 `AbstractUnitOfWork.__aexit__`
+的 18 行 commit/rollback 逻辑。
+
+**Owner 审查发现并修复：** 重构为 5 行 `try: await super().__aexit__(...) finally: conn.close()`。
+确保当 `commit()` 发生底层 I/O 故障时，原始异常原封不动向上传递（不被 rollback 期间的二次异常掩埋），
+上游 CircuitBreaker 能精准捕捉系统级故障并作出正确熔断决策。
+见 [sqlite_cdr_repository.py:120-124](src/voip_calc_core/infrastructure/sqlite_cdr_repository.py#L120-L124)。
+
+### 15. AI 审查闭环 — 熔断器的并发安全设计
+
+熔断器在 `$175\text{k calls/s}$` 的压力预期下采用"锁内改状态、锁外跑协程"设计，
+HALF_OPEN 状态下通过严格计数器守卫（`half_open_probes`）防止流量击穿下游服务。
+全部状态转换在 `asyncio.Lock` 保护下原子完成，协程执行在锁外进行，不序列化成功的并发调用。
+见 [circuit_breaker.py:97-136](src/voip_calc_core/application/circuit_breaker.py#L97-L136)。
 
 ## 如何主导 AI 完成高质量交付
 

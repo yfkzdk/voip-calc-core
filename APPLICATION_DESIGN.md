@@ -85,7 +85,7 @@ class CalculateRateResponse:
 
 审计字段 (`country_code`, `tier`, `night_valley_applied`) 让调用方能追溯费率的组成原因。
 
-## 4. 四步管道
+## 4. 五步管道
 
 ```
 call_start_time ──►[1] parse_iso8601_to_utc()──► aware UTC datetime
@@ -96,7 +96,9 @@ callee ──►[3] CallContext(caller, callee, time)────────┤
                                                        │
          ──►[4] RateCalculator.calculate(ctx, tier)────┤
                                                        │
-         ──►[5] CalculateRateResponse(...) ◄────────────┘
+         ──►[5] RatedCall.create() → UoW.save() ───────┤ (跳过: 无工厂)
+                                                       │
+         ──► CalculateRateResponse(...) ◄──────────────┘
 ```
 
 每一步的防御策略：
@@ -107,7 +109,7 @@ callee ──►[3] CallContext(caller, callee, time)────────┤
 | 2. 身份反查 | 熔断器阻止雪崩，异常降级 NORMAL |
 | 3. 领域构造 | CallContext 自身校验时区感知 |
 | 4. 费率计算 | 出口守卫 `at_least(¥0)` 防止负数单价 |
-| 5. 响应封装 | 不回显原始号码（已由 CallContext 持有） |
+| 5. 持久化落盘 | 2层原子幂等（内存 set + INSERT OR IGNORE），UoW 可选注入 |
 
 ## 5. 熔断器 (Circuit Breaker)
 
@@ -133,7 +135,9 @@ class CircuitBreaker:
 
 ### 幂等键
 
-`idempotency_key` 目前作为请求字段透传并回显。未来持久化层应基于此键做去重（`UNIQUE` 约束 + `ON CONFLICT` 返回已有结果）。
+`idempotency_key` 贯穿全链路：请求入参 → 响应回显 → CDR 持久化去重。
+持久化层基于此键实现 2 层原子去重（内存 set 预检 + `INSERT OR IGNORE` UNIQUE 约束），
+彻底消除 TOCTOU 竞态条件。详见 :ref:`PERSISTENCE_DESIGN.md §4`。
 
 ### 零框架依赖
 
@@ -152,25 +156,33 @@ voip-calc-core/
 │   │   ├── night_valley.py
 │   │   ├── call_context.py
 │   │   └── rate_calculator.py
-│   └── application/                          # NEW
+│   ├── application/
+│   │   ├── __init__.py
+│   │   ├── dto.py
+│   │   ├── ports.py                           # CdrRepository + UoW + Fetcher 端口
+│   │   ├── rated_call.py                      # RatedCall PO
+│   │   ├── time_parser.py
+│   │   ├── circuit_breaker.py
+│   │   └── routing_service.py
+│   └── infrastructure/                        # NEW
 │       ├── __init__.py
-│       ├── dto.py
-│       ├── ports.py
-│       ├── time_parser.py
-│       ├── circuit_breaker.py
-│       └── routing_service.py
+│       └── sqlite_cdr_repository.py           # SQLite 持久化适配器
 ├── tests/
 │   ├── test_money.py
 │   ├── test_country_code.py
 │   ├── test_customer_tier.py
 │   ├── test_night_valley.py
 │   ├── test_rate_calculator.py
-│   ├── test_time_parser.py                   # NEW
-│   ├── test_circuit_breaker.py               # NEW
-│   ├── test_application_dto.py               # NEW
-│   └── test_routing_service.py               # NEW
+│   ├── test_time_parser.py
+│   ├── test_circuit_breaker.py
+│   ├── test_application_dto.py
+│   ├── test_routing_service.py
+│   ├── test_rated_call.py                     # NEW
+│   ├── test_cdr_repository.py                 # NEW (Fake 实现)
+│   └── test_sqlite_cdr_repository.py          # NEW (SQLite 集成测试)
 ├── DESIGN.md
-├── APPLICATION_DESIGN.md                     # NEW (this file)
+├── APPLICATION_DESIGN.md
+├── PERSISTENCE_DESIGN.md                      # NEW
 ├── PROMPTS.md
 └── README.md
 ```

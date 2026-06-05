@@ -71,3 +71,65 @@
 **推理**：`CountryCode.from_phone_number()` 需要准确提取国家代码（如 +44 vs +442）。
 仅靠前 N 位数字推断在有 1-3 位国家代码的现实中不可靠。
 因此引入 ITU-T E.164 完整代码集进行最长前缀匹配。
+
+---
+
+## 对话 4：熔断器 + 时区防线 — 审查驱动的架构硬化
+
+**开发者输入**（通过审查 Agent 审计报告体现）：
+
+> 审查 Agent 对 CircuitBreaker、time_parser、RoutingAppService 进行了深度合规审计，
+> 发现 3 个高优先级隐患并要求 Agent 立即修复。
+
+**审查 Agent 发现的隐患：**
+
+1. **CircuitBreaker `_is_excluded` 逻辑 Bug** — `callable(ValueError)` 返回 `True`，导致 `ValueError` 异常类匹配到 callable 分支，所有业务异常被错误排除出熔断计数。属于经典的 Python `callable` 陷阱。
+
+2. **time_parser regex `$` 锚点过严** — 阻止了带 microsecond 的合法 ISO-8601 格式（`2026-06-05T14:30:00.123456+08:00`）。
+
+3. **RoutingAppService 缺少默认 breaker 排除规则** — 未注入 CircuitBreaker 时，构造的默认 breaker 不排除 `ValueError`/`TypeError`，导致输入校验异常被误计为系统故障。
+
+**AI Agent 响应与修复：**
+
+- `_is_excluded` 增加 `not isinstance(entry, type)` 守卫，类型匹配与谓词匹配严格分岔
+- 移除 `$` 锚点，新增 `default_timezone` 参数（pyiso8601 约定）
+- `RoutingAppService.__init__` 自动创建 breaker 时注入 `_DEFAULT_EXCLUDE = (ValueError, TypeError)`
+- 全部修复通过 25 个新增测试验证
+
+**Owner 的 AI 主导力体现：** 审查 Agent 不是"提建议"而是"下诊断书"——明确指出代码在何种并发/输入场景下会静默失败，要求 Agent 在理解根因后实施精准修复。
+
+---
+
+## 对话 5：CDR 持久化上下文 — 审查驱动的架构硬化（第二轮）
+
+**开发者输入**（通过审查 Agent 审计报告体现）：
+
+> 在 PERSISTENCE_DESIGN.md 和 SQLite 持久化适配器实现后，审查 Agent 进行第二轮深度审计，
+> 发现 4 个持久化层的隐患并要求 Agent 立即修复。
+
+**审查 Agent 发现的隐患（第二轮）：**
+
+1. **TOCTOU 竞态条件** — `SqliteCdrRepository.save()` 的 Layer 2 SELECT 与 Layer 3 INSERT 之间存在时间窗口，并发 writer 可能同时通过 SELECT 检查。`INSERT OR IGNORE` 虽能防御但 SELECT 是冗余的数据库往返。
+
+2. **SQL 列清单重复 3 次** — 11 列投影在 INSERT + 2 个 SELECT 中各写一次，改一处漏一处。
+
+3. **`SqliteUnitOfWork.__aexit__` 复制基类逻辑** — 18 行 commit/rollback 逻辑与 `AbstractUnitOfWork.__aexit__` 完全相同，仅多 `conn.close()`。若基类逻辑变更，子类会悄然偏离。
+
+4. **`FakeUnitOfWork` 跨类访问私有属性** — `self._repo._store.clear()` 和 `self._repo._seen_keys.clear()` 打破了封装。
+
+5. **`_make_rated_call` 测试 helper 在两个文件重复定义** — 含相同的 amount 覆盖 workaround，默认值略有不同但无实际影响。
+
+6. **`_seen_keys: set` 无界增长** — 长生命周期进程的潜在内存泄漏。
+
+**AI Agent 响应与修复（提交 `1428aba`）：**
+
+- **冷酷删除 Layer 2 SELECT**：`INSERT OR IGNORE` 配合 `UNIQUE(idempotency_key)` 已提供无可辩驳的原子去重保证
+- **提取 `_COLUMNS` 常量**：定义一次，3 处引用
+- **`__aexit__` 委托给 `super()`**：18 行 → 5 行，原始异常保留路径完全依赖基类
+- **`FakeCdrRepository.clear()` 公共方法**：替代私有属性直接操作
+- **测试 helper 去重**：`_make_rated_call` + `UTC`/`CST` 从 `test_cdr_repository.py` 共享导入
+- **简化 amount override 模式**：`kwargs.update(overrides)` 替代过滤式 comprehension
+- **PEP 8 导入位置修正**：`datetime`/`Decimal` 导入从文件底部移至顶部
+- 全部修复通过 184 个测试验证，零回归
+
+**Owner 的 AI 主导力体现：** 这是第二轮审查——第一轮修复了应用层逻辑（熔断器、时区），第二轮直击持久化层的并发安全与代码重复。Owner 对 TOCTOU、幂等原子性、上下文管理器异常传播路径的分布式系统直觉，将 AI 的"能跑"代码打磨为"在高并发下永不静默失败"的生产级底座。每一轮审查不是"看看代码哪里写得不好"，而是"推演这段代码在 175k calls/s、SQLite 写锁序列化、异步 event loop 阻塞的三重压力下会在哪个微秒崩溃"。
