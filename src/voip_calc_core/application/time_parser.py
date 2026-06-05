@@ -5,20 +5,33 @@ Python 3.9 compatibility: :func:`datetime.fromisoformat` does not accept
 """
 
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timezone, tzinfo
+from typing import Optional
 
-# "2026-06-05T14:30:00+0800" → the offset portion without the colon
-_OFFSET_NO_COLON = re.compile(r"([+-]\d{2})(\d{2})$")
+# Matches a ±HHMM offset that is missing the colon separator, e.g. "+0800".
+# Use search (no $ anchor) so the regex engine can find the offset anywhere;
+# in a well-formed ISO-8601 string the offset is always at the end.
+_OFFSET_NO_COLON = re.compile(r"([+-]\d{2})(\d{2})")
 
 
-def parse_iso8601_to_utc(raw: str) -> datetime:
+def parse_iso8601_to_utc(
+    raw: str,
+    *,
+    default_timezone: Optional[tzinfo] = None,
+) -> datetime:
     """Parse an ISO-8601 string and return a timezone-aware UTC datetime.
 
     The input **must** carry an explicit timezone offset.  Naive strings
     (missing offset or ``Z``) are rejected — the parser will not guess.
 
+    Args:
+        raw: ISO-8601 datetime string.
+        default_timezone: If provided, naive datetimes are assigned this
+            timezone instead of being rejected (pyiso8601 convention).
+
     Raises:
-        ValueError: if the string is not valid ISO-8601 **or** is naive.
+        ValueError: if the string is not valid ISO-8601 **or** is naive
+            and *default_timezone* is ``None``.
     """
     if not raw or not raw.strip():
         raise ValueError("call_start_time must not be empty")
@@ -43,9 +56,12 @@ def parse_iso8601_to_utc(raw: str) -> datetime:
         ) from exc
 
     if dt.tzinfo is None:
-        raise ValueError(
-            "call_start_time must include a timezone offset (e.g. +08:00, -05:00, Z). "
-            f"Got a naive datetime: {raw!r}"
-        )
+        if default_timezone is not None:
+            dt = dt.replace(tzinfo=default_timezone)
+        else:
+            raise ValueError(
+                "call_start_time must include a timezone offset (e.g. +08:00, -05:00, Z). "
+                f"Got a naive datetime: {raw!r}"
+            )
 
     return dt.astimezone(timezone.utc)

@@ -96,3 +96,32 @@ class TestImmutability:
         a = parse_iso8601_to_utc("2026-06-05T14:30:00+08:00")
         b = parse_iso8601_to_utc("2026-06-05T14:30:00+00:00")
         assert a != b
+
+
+class TestDefaultTimezone:
+    """pyiso8601 convention: default_timezone applied when input is naive."""
+
+    def test_naive_accepted_when_default_provided(self):
+        result = parse_iso8601_to_utc(
+            "2026-06-05T14:30:00", default_timezone=timezone(timedelta(hours=8))
+        )
+        assert result.hour == 6  # 14:30 CST → 06:30 UTC
+        assert result.minute == 30
+
+    def test_naive_with_default_utc(self):
+        result = parse_iso8601_to_utc(
+            "2026-06-05T14:30:00", default_timezone=UTC
+        )
+        assert result.hour == 14  # already UTC
+
+    def test_naive_still_rejected_when_default_is_none(self):
+        with pytest.raises(ValueError, match="timezone offset"):
+            parse_iso8601_to_utc("2026-06-05T14:30:00")
+
+    def test_default_ignored_when_offset_present(self):
+        """Explicit offset always takes precedence over default_timezone."""
+        result = parse_iso8601_to_utc(
+            "2026-06-05T14:30:00+00:00",
+            default_timezone=timezone(timedelta(hours=8)),
+        )
+        assert result.hour == 14  # +00:00, not +08:00
