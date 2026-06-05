@@ -431,3 +431,53 @@ callee ──►[3] CallContext(caller, callee, time)────────┤
 | **Commit 5** | `RoutingAppService` 集成 (五步管道) | `application/routing_service.py`, `tests/test_routing_service.py` |
 
 每个 commit 独立可发布，测试全绿。
+
+## 14. 分布式多节点幂等行为分析
+
+### 14.1 UNIQUE 约束的原子性保证
+
+`INSERT OR IGNORE` + `UNIQUE(idempotency_key)` 的去重是**存储引擎级别的原子操作**。
+B-tree 索引的键唯一性检查和行插入在同一个 B-tree 页锁定区间内完成——
+两个并发 writer（即使是来自不同节点的独立连接）不可能同时通过检查：
+
+```
+Writer A: INSERT OR IGNORE ... key="abc"  →  写入成功，rowcount=1
+Writer B: INSERT OR IGNORE ... key="abc"  →  检测到冲突，静默跳过，rowcount=0
+```
+
+结果确定且可复现：**先到达磁盘者胜出（first-write-wins）**。此行为不依赖事务隔离级别——UNIQUE 约束由存储引擎（非查询优化器）强制执行，在 SQLite、PostgreSQL、MySQL/InnoDB 的任何隔离级别下均保证原子。
+
+### 14.2 不会发生的故障模式
+
+以下是在 Stripe/Uber 级分布式幂等系统中已知的故障模式，**均不适用于当前架构**：
+
+| 故障模式 | 为何不适用 |
+|----------|-----------|
+| **读取异步副本导致复制滞后** | 当前适配器是单文件 SQLite，无主从拓扑。直接读取写入节点 |
+| **Redis Cluster 跨槽 Lua 原子性丧失** | 当前不使用 Redis；UNIQUE 约束在单一数据库内生效 |
+| **Payload 不匹配被静默丢弃** | 当前 CDR 的 `idempotency_key` 映射到确定性的计费结果——同一 key 总是对应同一金额。不存在"相同 key 不同 payload"的场景（若调用方故意为之，first-write-wins 是正确的业务语义） |
+| **孤儿锁阻塞重试** | 当前不使用 `absent → processing → completed` 三态机——`INSERT OR IGNORE` 是即时完成的，不保留 in-progress 状态 |
+| **Check-then-act race（TOCTOU）** | 已在审查期间消除——Layer 2 SELECT 被删除，仅保留内存 set（单进程 O(1)）和 `INSERT OR IGNORE`（跨进程原子） |
+
+### 14.3 多节点部署时唯一剩余的弱点
+
+当前双层幂等在**多节点无共享内存**场景下，Layer 1（内存 set）不跨节点共享。
+这**不影响正确性**——Layer 2（`INSERT OR IGNORE` UNIQUE 约束）会捕获所有跨节点重复。
+唯一代价是一次无意义的数据库往返（约 0.1-0.5ms for SQLite，约 0.3-1ms for PostgreSQL）。
+
+当节点数 > 3 且重复率 > 10% 时，建议升级为：
+
+```
+Layer 0: Redis SET NX EX 30 (跨节点共享, TTL 自清理)
+Layer 1: 内存 set (进程内 O(1))
+Layer 2: INSERT OR IGNORE UNIQUE (存储引擎原子性, 最后防线)
+```
+
+注意：Redis 层的引入必须遵守 **hash tag 规则**（`{tenant}:idempotency:{key}` 确保同一 slot），
+且 Redis 层丢失不影响正确性——仅影响性能（更多请求穿透到 Layer 2）。
+
+### 14.4 设计结论
+
+当前双层幂等在单节点部署（含多 worker 进程共享同一 SQLite 文件）下**无已知漏洞**。
+UNIQUE 约束提供的原子性在市场主流数据库中得到了十年级别的生产验证（PostgreSQL UNIQUE b-tree、MySQL/InnoDB UNIQUE index、SQLite UNIQUE）。
+尚无任何 CVE 或公开报告指向 UNIQUE 约束本身的并发绕过。

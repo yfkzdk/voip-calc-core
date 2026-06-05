@@ -310,3 +310,145 @@ class TestExclude:
         with pytest.raises(ConnectionError):
             await cb.call(down)
         assert cb.state == CircuitState.OPEN
+
+
+class TestHalfOpenConcurrency:
+    """Verify HALF_OPEN probe counting is atomic under concurrent callers.
+
+    The design rule is "mutate state inside lock, execute I/O outside lock."
+    With half_open_probes=N, exactly N concurrent callers must execute while
+    the rest are rejected — no overshoot, no probe starvation.
+    """
+
+    async def test_only_one_probe_with_half_open_probes_1(self):
+        """5 concurrent callers, half_open_probes=1 → exactly 1 executes."""
+        cb = CircuitBreaker(
+            failure_threshold=1, recovery_timeout=0.0, half_open_probes=1
+        )
+
+        async def fail():
+            raise RuntimeError("down")
+
+        with pytest.raises(RuntimeError):
+            await cb.call(fail)
+        assert cb.state == CircuitState.OPEN
+
+        executed = 0
+
+        async def probe():
+            nonlocal executed
+            await asyncio.sleep(0.01)  # yield to event loop — let concurrent tasks observe HALF_OPEN
+            executed += 1
+            return "ok"
+
+        results = await asyncio.gather(
+            *[cb.call(probe, fallback="rejected") for _ in range(5)]
+        )
+        accepted = [r for r in results if r == "ok"]
+        rejected = [r for r in results if r == "rejected"]
+
+        assert len(accepted) == 1
+        assert len(rejected) == 4
+        assert executed == 1  # probe body ran exactly once
+
+    async def test_exactly_two_probes_with_half_open_probes_2(self):
+        """half_open_probes=2 → exactly 2 probes execute, 3 rejected."""
+        cb = CircuitBreaker(
+            failure_threshold=1, recovery_timeout=0.0, half_open_probes=2
+        )
+
+        async def fail():
+            raise RuntimeError("down")
+
+        with pytest.raises(RuntimeError):
+            await cb.call(fail)
+        assert cb.state == CircuitState.OPEN
+
+        executed = 0
+
+        async def probe():
+            nonlocal executed
+            await asyncio.sleep(0.01)
+            executed += 1
+            return "ok"
+
+        results = await asyncio.gather(
+            *[cb.call(probe, fallback="rejected") for _ in range(5)]
+        )
+        accepted = [r for r in results if r == "ok"]
+        rejected = [r for r in results if r == "rejected"]
+
+        assert len(accepted) == 2
+        assert len(rejected) == 3
+        assert executed == 2
+
+    async def test_half_open_probe_failure_reopens_circuit(self):
+        """When the HALF_OPEN probe fails, circuit returns to OPEN immediately."""
+        cb = CircuitBreaker(
+            failure_threshold=1, recovery_timeout=60.0, half_open_probes=1
+        )
+
+        async def initial_fail():
+            raise RuntimeError("down")
+
+        with pytest.raises(RuntimeError):
+            await cb.call(initial_fail)
+        assert cb.state == CircuitState.OPEN
+
+        # Simulate recovery_timeout expiry
+        cb._last_failure_time = 0.0
+
+        async def probe_fails():
+            await asyncio.sleep(0.01)
+            raise ConnectionError("still unreachable")
+
+        # Probe executes in HALF_OPEN and fails → failure threshold 1 → OPEN
+        with pytest.raises(ConnectionError):
+            await cb.call(probe_fails)
+        assert cb.state == CircuitState.OPEN
+
+        # recovery_timeout=60 → next call stays OPEN, returns fallback
+        async def success():
+            return "ok"
+
+        result = await cb.call(success, fallback="still-degraded")
+        assert result == "still-degraded"
+
+    async def test_rejected_probes_dont_affect_success_count(self):
+        """Rejected callers must not reset failure count or alter state."""
+        cb = CircuitBreaker(
+            failure_threshold=2, recovery_timeout=0.0, half_open_probes=1
+        )
+
+        async def fail():
+            raise RuntimeError("down")
+
+        with pytest.raises(RuntimeError):
+            await cb.call(fail)
+        # failure_count=1 but threshold=2 → still CLOSED
+        assert cb.state == CircuitState.CLOSED
+
+        # Second failure trips to OPEN
+        with pytest.raises(RuntimeError):
+            await cb.call(fail)
+        assert cb.state == CircuitState.OPEN
+
+        executed = 0
+
+        async def probe():
+            nonlocal executed
+            await asyncio.sleep(0.01)
+            executed += 1
+            return "ok"
+
+        # 10 concurrent callers, only 1 probe allowed
+        results = await asyncio.gather(
+            *[cb.call(probe, fallback="rejected") for _ in range(10)]
+        )
+        assert sum(1 for r in results if r == "ok") == 1
+        assert sum(1 for r in results if r == "rejected") == 9
+        assert executed == 1
+
+        # After successful probe, circuit is CLOSED and failure_count=0
+        assert cb.state == CircuitState.CLOSED
+        assert cb._failure_count == 0
