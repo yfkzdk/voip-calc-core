@@ -4,22 +4,28 @@
 
 ```
 ┌──────────────────────────────────────────────────────────────┐
-│               CDR Persistence Context (CDR 持久化上下文)       │
+│            CDR Persistence Context (CDR 持久化上下文)         │
+│                                                              │
+│  应用层                                          基础设施层   │
 │                                                              │
 │  ┌──────────────────┐    ┌──────────────────────────┐       │
-│  │ CalculateRate     │───▶│  CdrRepository            │       │
-│  │ Response (DTO)    │    │  (端口 · ABC)             │       │
-│  └──────────────────┘    └──────────┬───────────────┘       │
-│                                     │                        │
-│                          ┌──────────┼──────────┐             │
-│                          ▼          ▼          ▼             │
-│                   SqliteCdrRepo  FakeRepo   PostgresRepo     │
-│                   (适配器·v1)   (测试)     (未来)            │
-│                                                              │
-│  ┌──────────────────────────────────────────────────┐       │
-│  │  UnitOfWork                                       │       │
-│  │  (原子事务边界 · commit / rollback)                │       │
-│  └──────────────────────────────────────────────────┘       │
+│  │ CalculateRate     │───▶│  CdrRepository (端口·ABC) │       │
+│  │ Response (DTO)    │    └──────────┬───────────────┘       │
+│  └────────┬─────────┘               │ 实现                    │
+│           │                         ▼                        │
+│           │              ┌──────────────────────┐            │
+│           │              │  SqliteCdrRepository  │  (开发/测试)│
+│           │              │  ┌──────────────────┐ │            │
+│           │              │  │ 内存幂等预检(set)  │ │ ← 三层防护 │
+│           │              │  │ → find_by_key    │ │   第 1 层  │
+│           │              │  │ → INSERT OR IGNORE│ │   第2+3层  │
+│           │              │  └──────────────────┘ │            │
+│           │              └──────────────────────┘            │
+│           │                                                  │
+│  ┌────────┴─────────┐     ┌──────────────────────────┐       │
+│  │ RatedCall (PO)    │     │  AbstractUnitOfWork       │       │
+│  │ 持久化数据模型     │     │  (原子事务边界)            │       │
+│  └──────────────────┘     └──────────────────────────┘       │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -33,31 +39,35 @@
 │  RoutingAppService  │  (应用层 · 已有)
 │  (编排服务)          │
 └────────┬────────────┘
-         │ 调用 CdrRepository.save(rated_call)
+         │ ① 计算费率 (现有逻辑)
+         │ ② 构造 RatedCall (infrastructure PO)
+         │ ③ 幂等预检 (内存 set → DB 查 → DB UNIQUE)
+         │ ④ uow.cdr_repo.save(rated_call)
+         │ ⑤ uow.commit()
          ▼
 ┌─────────────────────┐
-│  CdrRepository      │  (端口 · 新增)
-│  (ABC)              │
+│  CdrRepository      │  (端口 · 应用层 ABC)
+│  AbstractUnitOfWork  │  (端口 · 应用层 ABC)
 └────────┬────────────┘
          │ 实现
          ▼
 ┌─────────────────────┐
-│  SqliteCdrRepository│  (适配器 · 新增)
+│  SqliteCdrRepository│  (适配器 · infrastructure/)
 │  + SqliteUnitOfWork │
 └────────┬────────────┘
          │
          ▼
 ┌─────────────────────┐
 │  sqlite3            │  (Python stdlib)
-│  rated_calls.db     │
+│  :memory: 或文件    │
 └─────────────────────┘
 ```
 
-**关键原则**：RoutingAppService 只依赖 `CdrRepository` 抽象，不知道底层是 SQLite 还是 PostgreSQL。
+**关键原则**：RoutingAppService 只依赖 `CdrRepository` + `AbstractUnitOfWork` 抽象，不知道底层是 SQLite 还是 PostgreSQL。
 
-## 3. 领域模型 (Domain Model)
+## 3. 持久化数据模型 (Persistence Object)
 
-### 3.1 RatedCall — 已计费通话记录 (实体)
+### 3.1 RatedCall — 已计费通话记录 (PO / Data Model)
 
 ```
 RatedCall {
@@ -75,21 +85,25 @@ RatedCall {
 }
 ```
 
-- **实体**（非值对象），因为 `cdr_id` 是唯一标识，且未来可能有生命周期（如重新计费）。
-- 构造时强制校验 `call_start_time.tzinfo is not None` 和 `rated_at.tzinfo is not None`。
+- **PO (Persistence Object)**，不是领域实体。`RatedCall` 是一个纯数据载体，负责将 `CalculateRateResponse` 的字段映射到持久化存储。它没有领域行为（没有业务方法、不守卫业务不变式），因此不属于领域层。
+- 放在 `infrastructure/rated_call.py`，不放在 `domain/`。
+- 构造时强制校验 `call_start_time.tzinfo is not None` 和 `rated_at.tzinfo is not None`（数据完整性校验，不是业务规则）。
 - 不可变：一旦构造，字段不可修改（`@dataclass(frozen=True)`）。
 
-### 3.2 为什么 RatedCall 是实体而非值对象？
+### 3.2 为什么 RatedCall 不放在领域层？
 
-| 值对象 | 实体 |
-|--------|------|
-| 无唯一标识，靠值判等 | 有唯一标识 (`cdr_id`) |
-| 可被整体替换 | 有自己的生命周期 |
-| 例：Money, CountryCode | 例：RatedCall, Order |
+| 领域对象 | 持久化对象 (RatedCall) |
+|----------|----------------------|
+| 有业务行为和不変式 | 纯数据载体 |
+| 例：Money 守卫同币种加减 | 例：字段映射 + 类型转换 |
+| 测试关注业务规则 | 测试关注序列化/反序列化往返 |
+| 变化原因：领域规则变了 | 变化原因：表结构或存储格式变了 |
 
-RatedCall 由 `cdr_id` 标识，未来可能被重新计费（产生新版本但指向同一通话），因此是实体。
+**RatedCall 的变化原因**是存储 schema 变了（加字段、改类型），不是计费规则变了。按单一职责原则，它属于基础设施层。
 
 ## 4. 端口定义 (Ports)
+
+端口放在 `application/ports.py`，与已有的 `CustomerProfileFetcher` 并列。
 
 ### 4.1 CdrRepository — CDR 仓储端口
 
@@ -98,7 +112,7 @@ from abc import ABC, abstractmethod
 from typing import Optional
 
 class CdrRepository(ABC):
-    """CDR 持久化端口 — 领域层定义，适配器实现。"""
+    """CDR 持久化端口 — 应用层定义，基础设施层实现。"""
 
     @abstractmethod
     async def save(self, rated_call: RatedCall) -> None:
@@ -120,13 +134,20 @@ class CdrRepository(ABC):
         ...
 ```
 
-### 4.2 UnitOfWork — 工作单元端口
+### 4.2 AbstractUnitOfWork — 工作单元端口
 
 ```python
 from abc import ABC, abstractmethod
 
 class AbstractUnitOfWork(ABC):
-    """原子事务边界 — 管理 CDR 写入的一致性。"""
+    """原子事务边界 — 管理 CDR 写入的一致性。
+
+    .. warning::
+       实现 ``__aexit__`` 时必须正确处理 **异常覆盖** 问题：
+       如果 ``commit()`` 抛出异常，随后 ``rollback()`` 也抛出异常，
+       必须重新抛出 ``commit()`` 的原始异常，不能让它被 ``rollback()``
+       的异常静默覆盖。否则上游熔断器将收到错误的失败原因。
+    """
 
     cdr_repo: CdrRepository
 
@@ -148,41 +169,48 @@ class AbstractUnitOfWork(ABC):
         ...
 ```
 
-## 5. 幂等去重设计
+## 5. 幂等去重设计 — 三层防护
 
 ### 5.1 核心流程
 
 ```
 RoutingAppService.execute()
   │
-  ├─[1] 计算费率 (现有逻辑)
+  ├─[1] 计算费率 (现有逻辑，计算纯 CPU，不涉及 I/O)
   │
   ├─[2] 构造 RatedCall (含 idempotency_key)
   │
-  ├─[3] repo.find_by_idempotency_key(key)
-  │     ├─ 命中 → 直接返回已有 RatedCall（不重复写入）
+  ├─[3] ★ 第一层：内存预检 (O(1)，无 I/O)
+  │     │  repo._seen_keys 是一个 Python set
+  │     ├─ 命中 → 返回已有结果（不碰数据库）
+  │     └─ 未命中 → 加入 set，继续
+  │
+  ├─[4] ★ 第二层：数据库查重
+  │     │  repo.find_by_idempotency_key(key)
+  │     ├─ 命中 → 返回已有 RatedCall（并发穿透的少数情况）
   │     └─ 未命中 → 继续
   │
-  └─[4] uow.commit() → repo.save(rated_call)
-        └─ INSERT OR IGNORE（数据库层兜底）
+  └─[5] ★ 第三层：数据库唯一约束（最后防线）
+        │  uow.commit() → INSERT OR IGNORE
+        └─ 冲突 → 不抛异常，静默忽略（并发穿透已由第 2 层处理）
 ```
 
-两层防护：
-- **应用层**：`find_by_idempotency_key` 先查，避免无效写入
-- **数据库层**：`UNIQUE(idempotency_key)` 约束，防止并发穿透
+### 5.2 为什么需要三层？
 
-### 5.2 为什么不用 INSERT ... ON CONFLICT DO NOTHING 直接写？
+| 层级 | 机制 | 处理什么场景 |
+|------|------|-------------|
+| 内存 set | `idempotency_key in self._seen_keys` | 同一进程内的重复请求（绝大多数情况），O(1)，零 I/O |
+| 数据库查询 | `SELECT WHERE idempotency_key = ?` | 跨进程/跨重启的重复请求 |
+| UNIQUE 约束 | `INSERT OR IGNORE` | 并发 race condition 的最后防线 |
 
-SQLite 支持 `INSERT OR IGNORE`，语义等价。但应用层的先查后写有两个优势：
-1. 可以返回"已存在的相同请求"给调用方（幂等响应回放）
-2. 减少无效的写入操作，降低 WAL 压力
+关键洞察：**幂等检查是高频操作，绝不能挂在数据库写链路上**。第 1 层（内存 set）拦截 99.9% 的重复请求，第 2+3 层处理跨进程和并发边界情况。
 
 ### 5.3 幂等键格式
 
 沿用现有 DTO 中的 `idempotency_key` 字段。调用方（API 网关）负责生成，建议格式：
 ```
 {client_id}-{uuid_v4}
-例：gateway-01-a3f2b8c1-... 
+例：gateway-01-a3f2b8c1-...
 ```
 
 服务端不校验格式，只做字节比对。
@@ -202,7 +230,7 @@ CREATE TABLE IF NOT EXISTS rated_calls (
     night_valley_applied INTEGER NOT NULL,     -- 0/1 (SQLite 无 BOOLEAN)
     amount            TEXT NOT NULL,           -- Decimal 序列化为字符串
     currency          TEXT NOT NULL,
-    idempotency_key   TEXT NOT NULL UNIQUE,    -- 幂等去重约束
+    idempotency_key   TEXT NOT NULL UNIQUE,    -- 幂等去重约束 (第 3 层)
     rated_at          TEXT NOT NULL,           -- ISO-8601 UTC
     extra_fields      TEXT DEFAULT '{}'        -- JSON 扩展字段 (未来)
 );
@@ -222,22 +250,53 @@ CREATE INDEX idx_rated_calls_rated_at ON rated_calls(rated_at);
 | 索引只建 `caller` 和 `rated_at` | 当前查询 pattern 只有这两种；后续按需加 |
 | 时间戳存字符串不存 Unix 数值 | 人类可读，调试友好，ISO-8601 排序等价于时间序 |
 
-## 7. 架构决策记录 (ADR)
+## 7. SQLite 性能边界声明
 
-### ADR-5: sqlite3 作为第一版持久化适配器
+> **架构警告：SQLite 适配器仅限开发、本地测试及低吞吐场景使用。**
+>
+> SQLite 的写锁是**数据库级锁**（database-level lock）。即使开启 WAL 模式，并发写入仍然被串行化。在高吞吐生产环境（>100 concurrent writes/s），SQLite 会成为系统瓶颈，导致：
+> - 上游协程排队等待写锁，内存飙升
+> - 应用层精心优化的低延迟（~5.7μs 纯计算）被 I/O 等待完全淹没
+> - 核心计费链路的可用性被持久化层拖垮
+>
+> **生产环境必须使用以下方案之一**：
+> 1. **异步落盘适配器** (推荐)：核心链路 fire-and-forget 写入内存队列，后台 Worker 批量刷盘
+> 2. **PostgreSQL 适配器**：行级锁 + 连接池，足以支撑中等并发
+> 3. **消息队列 + 消费者**：写入 Kafka/Redis Stream，独立消费者负责 CDR 落地
 
-**选择**：Python 标准库 `sqlite3`，WAL 模式，单文件存储。
+## 8. 生产环境异步落盘设计 (未来规划)
+
+```
+RoutingAppService.execute()         ┌─────────────────────┐
+  │                                  │  CdrWriteWorker      │
+  ├─ 计算费率                         │  (后台协程)           │
+  ├─ 幂等预检 (内存 set)              │                     │
+  ├─ 写入内存队列 ──────────────────▶  │  while queue:        │
+  │   (fire-and-forget)              │    batch = queue.get()│
+  └─ 返回响应                         │    repo.save(batch)  │
+                                     │    uow.commit()      │
+                                     └─────────────────────┘
+```
+
+- 核心链路不等待数据库 I/O 完成
+- 内存队列有界（`maxsize=10000`），防止 OOM
+- Worker 批量提交，降低事务开销
+- 队列满时降级为同步写入（背压机制）
+
+此设计不在 v1 实现范围内，但端口设计已预留替换空间。
+
+## 9. 架构决策记录 (ADR)
+
+### ADR-5: sqlite3 作为第一版持久化适配器（仅限开发/测试）
+
+**选择**：Python 标准库 `sqlite3`，WAL 模式，`:memory:` 用于测试。
 
 **理由**：
 - 零外部依赖，恪守项目宪章（`DESIGN.md` ADR-1）
-- WAL 模式下读写不互斥，足以支撑中等并发 CDR 写入
 - 单文件部署，测试隔离只需换文件路径
-- 未来换 PostgreSQL：写一个新的 `PostgresCdrRepository`，领域代码一行不改
+- 未来换 PostgreSQL 或异步队列：写新适配器，端口不变
 
-**替代方案**：
-- PostgreSQL：功能最强，但引入 `asyncpg` 外部依赖，违反当前零依赖原则
-- Redis：适合缓存但不适合作为 CDR 的持久化数据源
-- 纯文件 (CSV/JSONL)：实现简单但查询和去重困难
+**硬性约束**：SQLite 适配器不得用于生产环境（见第 7 节性能边界声明）。
 
 ### ADR-6: Repository 端口用 ABC 而非 Protocol
 
@@ -248,36 +307,62 @@ CREATE INDEX idx_rated_calls_rated_at ON rated_calls(rated_at);
 - ABC 在实例化时会验证抽象方法是否实现，提供更早的错误反馈
 - 与项目中已有的 `CustomerProfileFetcher` 端口风格一致
 
-### ADR-7: Unit of Work 管理事务边界
+### ADR-7: Unit of Work 管理事务边界，显式处理异常覆盖
 
-**选择**：引入 `AbstractUnitOfWork` 抽象，由领域服务通过 `async with uow:` 使用。
+**选择**：引入 `AbstractUnitOfWork` 抽象，由 `async with uow:` 管理事务。`__aexit__` 中 `commit()` 异常不会被 `rollback()` 异常覆盖。
 
-**理由**（Cosmic Python 第 6 章）：
-- 领域服务不应管理事务——那是基础设施的职责
-- UnitOfWork 封装了 commit/rollback 语义，领域代码只需要 `uow.commit()`
-- 测试用 `FakeUnitOfWork`，commit 是空操作，数据存内存
-- `__aexit__` 自动 rollback 异常，符合"safe by default"原则
-
-### ADR-8: 先查后写 + 数据库约束双层幂等防护
-
-**选择**：应用层 `find_by_idempotency_key` + 数据库 `UNIQUE(idempotency_key)`。
+**实现要求**（Cosmic Python 第 6 章 + 异常安全加固）：
+```python
+async def __aexit__(self, exc_type, exc_val, exc_tb):
+    if exc_type is not None:
+        await self.rollback()
+        return  # 不吞异常，让它继续传播
+    try:
+        await self.commit()
+    except BaseException:
+        # commit 失败 → 尝试回滚，但必须保留原始异常
+        try:
+            await self.rollback()
+        except BaseException:
+            pass  # rollback 失败不覆盖 commit 的原始异常
+        raise  # 重新抛出 commit 的异常
+```
 
 **理由**：
-- 应用层查找可以返回幂等响应（复用已有结果）
-- 数据库唯一约束是最后防线，防止并发 race condition
-- 不是过度设计——`idempotency_key` 从 APPLICATION_DESIGN.md 第一天就在 DTO 里了
+- 领域服务不应管理事务——那是基础设施的职责
+- 测试用 `FakeUnitOfWork`，commit 是空操作
+- 异常安全：熔断器必须看到真实的失败原因，不能被 rollback 异常掩盖
 
-## 8. 不变式清单
+### ADR-8: 三层幂等防护（内存 → 查询 → 约束）
+
+**选择**：内存 set 预检 → `find_by_idempotency_key` → `UNIQUE(idempotency_key)`。
+
+**理由**：
+- 第 1 层（内存 set）拦截 99.9% 重复请求，O(1)，零 I/O
+- 第 2 层（数据库查询）响应幂等回放（返回已有结果）
+- 第 3 层（UNIQUE 约束）是并发 race condition 的最后防线
+- 每层有独立的存在理由，不冗余
+
+### ADR-9: RatedCall 是基础设施 PO，不是领域实体
+
+**选择**：`RatedCall` 放在 `infrastructure/` 而非 `domain/`。
+
+**理由**：
+- `RatedCall` 没有领域行为——它是从 `CalculateRateResponse` 到数据库行的字段映射器
+- 它的变化原因是存储 schema 变了，不是计费规则变了
+- 放在 `infrastructure/` 保持领域层纯净，避免贫血模型污染
+
+## 10. 不变式清单
 
 | 编号 | 不变式 | 实施位置 |
 |------|--------|----------|
-| I-6 | `idempotency_key` 全局唯一 | `rated_calls` 表 UNIQUE 约束 + `SqliteCdrRepository.save()` |
+| I-6 | `idempotency_key` 全局唯一 | 内存 set + DB 查询 + UNIQUE 约束（三层） |
 | I-7 | RatedCall 的时间字段必须 aware UTC | RatedCall 构造时 `__post_init__` 校验 |
 | I-8 | `amount >= 0`（非负单价） | RatedCall 构造时校验 |
 | I-9 | `currency` 必须为 "CNY" | RatedCall 构造时校验（当前仅支持人民币） |
 | I-10 | CDR 不可修改（append-only） | Repository 只提供 `save()`，不提供 `update()` / `delete()` |
 
-## 9. 目录结构
+## 11. 目录结构
 
 ```
 voip-calc-core/
@@ -293,27 +378,20 @@ voip-calc-core/
 │   ├── application/
 │   │   ├── __init__.py
 │   │   ├── dto.py
-│   │   ├── ports.py                    # 新增 CdrRepository + UnitOfWork 端口
+│   │   ├── ports.py                    # 新增 CdrRepository + AbstractUnitOfWork
 │   │   ├── time_parser.py
 │   │   ├── circuit_breaker.py
 │   │   └── routing_service.py
-│   └── infrastructure/                 # NEW — 适配器层
+│   └── infrastructure/                 # 适配器层
 │       ├── __init__.py
-│       ├── rated_call.py              # RatedCall 实体
+│       ├── rated_call.py              # RatedCall PO (数据模型，非实体)
 │       └── sqlite_cdr_repository.py   # SQLite 适配器 + SqliteUnitOfWork
 ├── tests/
-│   ├── test_money.py
-│   ├── test_country_code.py
-│   ├── test_customer_tier.py
-│   ├── test_night_valley.py
-│   ├── test_rate_calculator.py
-│   ├── test_time_parser.py
-│   ├── test_circuit_breaker.py
-│   ├── test_application_dto.py
-│   ├── test_routing_service.py
-│   ├── test_rated_call.py             # NEW
-│   ├── test_sqlite_cdr_repository.py  # NEW (集成测试，需要真实 sqlite3)
-│   └── test_cdr_uow.py                # NEW
+│   ├── ... (已有测试)
+│   ├── test_rated_call.py             # NEW — PO 构造与校验
+│   ├── test_cdr_repository.py         # NEW — FakeRepository 单元测试
+│   ├── test_cdr_uow.py                # NEW — UnitOfWork 单元测试
+│   └── test_sqlite_cdr_repository.py  # NEW — SQLite 集成测试
 ├── DESIGN.md
 ├── APPLICATION_DESIGN.md
 ├── PERSISTENCE_DESIGN.md              # NEW (this file)
@@ -321,7 +399,9 @@ voip-calc-core/
 └── README.md
 ```
 
-## 10. RoutingAppService 集成点
+**注意**：`application/ports.py` 扩展现有文件（已有 `CustomerProfileFetcher`），不新建文件。
+
+## 12. RoutingAppService 集成点
 
 最终 `RoutingAppService.execute()` 变为五步管道：
 
@@ -334,43 +414,20 @@ callee ──►[3] CallContext(caller, callee, time)────────┤
                                                        │
          ──►[4] RateCalculator.calculate(ctx, tier)────┤
                                                        │
-         ──►[5] repo.save(RatedCall(...)) ◄────────────┘ (幂等去重)
+         ──►[5] 幂等预检 → repo.save(RatedCall(...)) ◄──┘
+               uow.commit()
 ```
 
-第 5 步通过 UnitOfWork 管理事务：`RateCalculator` 计算完成后 → 构造 `RatedCall` → `uow.cdr_repo.save()` → `uow.commit()`。
+第 5 步通过 `AbstractUnitOfWork` 管理事务。幂等三层防护全部在 `save()` 调用链中透明完成。
 
-## 11. FakeRepository（测试用）
+## 13. 实施路线
 
-```python
-class FakeCdrRepository(CdrRepository):
-    """In-memory CDR repository for tests — no database needed."""
-    
-    def __init__(self):
-        self._store: dict[str, RatedCall] = {}
-    
-    async def save(self, rated_call: RatedCall) -> None:
-        if rated_call.idempotency_key in self._store:
-            raise DuplicateIdempotencyKeyError(rated_call.idempotency_key)
-        self._store[rated_call.idempotency_key] = rated_call
-    
-    async def find_by_idempotency_key(self, key: str) -> Optional[RatedCall]:
-        return self._store.get(key)
-    
-    async def find_by_caller(self, caller: str, limit: int = 50) -> list[RatedCall]:
-        return [rc for rc in self._store.values() if rc.caller == caller][:limit]
-```
-
-所有单元测试使用 `FakeCdrRepository` + `FakeUnitOfWork`。唯一的集成测试（`test_sqlite_cdr_repository.py`）使用真实 `sqlite3` 内存数据库（`:memory:`）。
-
-## 12. 实施路线
-
-| 阶段 | 内容 | 预计新增测试 |
-|------|------|-------------|
-| **Commit 1** | `RatedCall` 实体 + 构造校验 | ~8 测试 |
-| **Commit 2** | `CdrRepository` 端口 (ABC) + `FakeCdrRepository` | ~6 测试 |
-| **Commit 3** | `AbstractUnitOfWork` 端口 + `FakeUnitOfWork` | ~5 测试 |
-| **Commit 4** | `SqliteCdrRepository` 适配器 (WAL 模式, `INSERT OR IGNORE`) | ~8 测试 |
-| **Commit 5** | `RoutingAppService` 集成 CdrRepository + UnitOfWork | ~6 测试 (扩展已有) |
-| **Commit 6** | `PERSISTENCE_DESIGN.md` 提交 | — |
+| 阶段 | 内容 | 涉及文件 |
+|------|------|----------|
+| **Commit 1** | `RatedCall` PO (`infrastructure/`) + 构造校验 | `infrastructure/rated_call.py`, `tests/test_rated_call.py` |
+| **Commit 2** | `CdrRepository` + `AbstractUnitOfWork` 端口 (扩展 `ports.py`) | `application/ports.py` |
+| **Commit 3** | `FakeCdrRepository` + `FakeUnitOfWork` (测试用) | `tests/test_cdr_repository.py`, `tests/test_cdr_uow.py` |
+| **Commit 4** | `SqliteCdrRepository` + `SqliteUnitOfWork` (含三层幂等) | `infrastructure/sqlite_cdr_repository.py`, `tests/test_sqlite_cdr_repository.py` |
+| **Commit 5** | `RoutingAppService` 集成 (五步管道) | `application/routing_service.py`, `tests/test_routing_service.py` |
 
 每个 commit 独立可发布，测试全绿。
