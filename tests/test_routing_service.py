@@ -6,7 +6,7 @@ from typing import Optional
 
 from voip_calc_core.domain.customer_tier import CustomerTier, TierEnum
 from voip_calc_core.domain.rate_calculator import RateCalculator
-from voip_calc_core.application.circuit_breaker import CircuitBreaker
+from voip_calc_core.application.circuit_breaker import CircuitBreaker, CircuitState
 from voip_calc_core.application.dto import CalculateRateRequest, CalculateRateResponse
 from voip_calc_core.application.ports import CustomerProfileFetcher
 from voip_calc_core.application.routing_service import RoutingAppService
@@ -173,3 +173,41 @@ class TestRoutingAppServiceTimeRejection:
         )
         with pytest.raises(ValueError, match="Invalid ISO-8601"):
             await service.execute(build_request(call_start_time="yesterday"))
+
+
+class TestRoutingAppServiceDefaultExclude:
+    """When no CircuitBreaker is injected, the service creates one with
+    sensible defaults that exclude ValueError and TypeError from counting."""
+
+    class ValueErrorFetcher(CustomerProfileFetcher):
+        async def fetch_tier_by_phone(self, phone_number: str) -> CustomerTier:
+            raise ValueError("invalid phone format")
+
+    class SystemErrorFetcher(CustomerProfileFetcher):
+        async def fetch_tier_by_phone(self, phone_number: str) -> CustomerTier:
+            raise ConnectionError("down")
+
+    async def test_default_breaker_excludes_value_error(self):
+        """ValueError from fetcher → degrade to NORMAL, circuit stays CLOSED."""
+        service = RoutingAppService(
+            calculator=RateCalculator(),
+            profile_fetcher=self.ValueErrorFetcher(),
+        )
+        r1 = await service.execute(build_request(idempotency_key="k1"))
+        assert r1.tier == "NORMAL"
+
+        r2 = await service.execute(build_request(idempotency_key="k2"))
+        assert r2.tier == "NORMAL"
+        # Circuit should NOT be open — ValueError is excluded
+        assert service._breaker.state == CircuitState.CLOSED
+
+    async def test_default_breaker_counts_system_error(self):
+        """System error from fetcher → degrade to NORMAL, circuit trips."""
+        service = RoutingAppService(
+            calculator=RateCalculator(),
+            profile_fetcher=self.SystemErrorFetcher(),
+        )
+        # default failure_threshold=5 — need 5 failures to trip
+        for i in range(5):
+            await service.execute(build_request(idempotency_key=f"k{i}"))
+        assert service._breaker.state == CircuitState.OPEN
