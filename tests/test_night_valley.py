@@ -63,6 +63,13 @@ class TestNightValleyReduction:
 class TestNightValleyCustomRange:
     """NightValleyDiscount can be configured with custom range."""
 
+    def test_zero_reduction_accepted(self):
+        """reduction=0 is valid — night valley with no discount is allowed."""
+        policy = NightValleyDiscount(reduction=Decimal("0"))
+        assert policy.reduction == Decimal("0")
+        assert policy.reduction_amount() == Money(Decimal("0"), "CNY")
+
+
     def test_custom_hours(self):
         policy = NightValleyDiscount(start_hour=22, end_hour=6, reduction=Decimal("0.03"))
         assert policy.is_applicable(datetime(2026, 6, 5, 22, 30, tzinfo=CST)) is True

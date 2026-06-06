@@ -95,6 +95,15 @@ class TestMoneyMultiplication:
         result = money * 0.5
         assert result.amount == Decimal("0.05")
 
+    def test_multiply_by_inexact_float_defends_precision(self):
+        """str() defence prevents IEEE 754 garbage in Decimal conversion."""
+        money = Money(Decimal("1.00"), "CNY")
+        scalar = 0.1 * 3  # 0.30000000000000004 in IEEE 754
+        result = money * scalar
+        # str() defence: Decimal(str(scalar)), NOT Decimal(scalar) direct.
+        # Decimal(0.1*3) would leak the full binary representation.
+        assert result.amount == Decimal(str(scalar))
+
     def test_multiply_is_immutable(self):
         money = Money(Decimal("0.10"), "CNY")
         _ = money * Decimal("0.5")
