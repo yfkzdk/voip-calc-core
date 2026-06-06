@@ -5,8 +5,7 @@ rate is applied to *chargeable* duration (rounded up to the configured
 increment), not raw wall-clock seconds.
 """
 
-from dataclasses import dataclass, field
-from typing import ClassVar
+from dataclasses import dataclass
 
 
 @dataclass(frozen=True)
@@ -26,10 +25,6 @@ class BillingIncrement:
     initial_seconds: int
     subsequent_seconds: int
 
-    PER_MINUTE: ClassVar["BillingIncrement"] = field(default=None, init=False)  # type: ignore[assignment]
-    PER_6_SECONDS: ClassVar["BillingIncrement"] = field(default=None, init=False)  # type: ignore[assignment]
-    PER_SECOND: ClassVar["BillingIncrement"] = field(default=None, init=False)  # type: ignore[assignment]
-
     def __post_init__(self):
         if self.initial_seconds < 1:
             raise ValueError(
@@ -45,29 +40,21 @@ class BillingIncrement:
 
         Uses ceiling semantics: any fraction of an increment is charged
         as a full increment (telecom industry standard).
+
+        Complexity: O(1) — integer arithmetic, no loop.
         """
         if actual_seconds <= 0:
             return 0
-
-        charged = 0
-        remaining = actual_seconds
-
-        inc = self.initial_seconds
-        if remaining > 0:
-            used = min(remaining, inc)
-            charged += inc
-            remaining -= used
-
-        inc = self.subsequent_seconds
-        while remaining > 0:
-            used = min(remaining, inc)
-            charged += inc
-            remaining -= used
-
-        return charged
+        if actual_seconds <= self.initial_seconds:
+            return self.initial_seconds
+        remaining = actual_seconds - self.initial_seconds
+        pulses = (
+            remaining + self.subsequent_seconds - 1
+        ) // self.subsequent_seconds
+        return self.initial_seconds + pulses * self.subsequent_seconds
 
 
 # Module-level singletons — frozen dataclass, safe to share.
-BillingIncrement.PER_MINUTE = BillingIncrement(60, 60)  # type: ignore[call-arg]
-BillingIncrement.PER_6_SECONDS = BillingIncrement(6, 6)  # type: ignore[call-arg]
-BillingIncrement.PER_SECOND = BillingIncrement(1, 1)  # type: ignore[call-arg]
+BillingIncrement.PER_MINUTE = BillingIncrement(60, 60)
+BillingIncrement.PER_6_SECONDS = BillingIncrement(6, 6)
+BillingIncrement.PER_SECOND = BillingIncrement(1, 1)
