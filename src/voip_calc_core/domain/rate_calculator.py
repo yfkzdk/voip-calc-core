@@ -1,5 +1,6 @@
 """RateCalculator — stateless domain service for per-minute rate calculation."""
 
+from datetime import datetime
 from decimal import Decimal
 from typing import Optional
 
@@ -22,6 +23,10 @@ class RateCalculator:
     def night_valley(self) -> NightValleyDiscount:
         """The night-valley discount configuration this calculator uses."""
         return self._night_valley
+
+    def is_night_valley(self, call_time: datetime) -> bool:
+        """Return True if *call_time* falls within the night valley window."""
+        return self._night_valley.is_applicable(call_time)
 
     def calculate(
         self, context: CallContext, customer_tier: CustomerTier

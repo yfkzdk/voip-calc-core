@@ -1,11 +1,13 @@
 """Tests for NightValleyDiscount value object."""
 
 import pytest
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from voip_calc_core.domain.night_valley import NightValleyDiscount
 from voip_calc_core.domain.money import Money
+
+CST = timezone(timedelta(hours=8))  # China Standard Time
 
 
 class TestNightValleyApplicability:
@@ -17,31 +19,31 @@ class TestNightValleyApplicability:
         return NightValleyDiscount()
 
     def test_applicable_at_23_00(self, policy):
-        call_time = datetime(2026, 6, 5, 23, 0, 0)
+        call_time = datetime(2026, 6, 5, 23, 0, 0, tzinfo=CST)
         assert policy.is_applicable(call_time) is True
 
     def test_applicable_at_23_59(self, policy):
-        call_time = datetime(2026, 6, 5, 23, 59, 59)
+        call_time = datetime(2026, 6, 5, 23, 59, 59, tzinfo=CST)
         assert policy.is_applicable(call_time) is True
 
     def test_applicable_at_midnight(self, policy):
-        call_time = datetime(2026, 6, 6, 0, 0, 0)
+        call_time = datetime(2026, 6, 6, 0, 0, 0, tzinfo=CST)
         assert policy.is_applicable(call_time) is True
 
     def test_applicable_at_04_59(self, policy):
-        call_time = datetime(2026, 6, 6, 4, 59, 59)
+        call_time = datetime(2026, 6, 6, 4, 59, 59, tzinfo=CST)
         assert policy.is_applicable(call_time) is True
 
     def test_not_applicable_at_05_00(self, policy):
-        call_time = datetime(2026, 6, 6, 5, 0, 0)
+        call_time = datetime(2026, 6, 6, 5, 0, 0, tzinfo=CST)
         assert policy.is_applicable(call_time) is False
 
     def test_not_applicable_at_12_00(self, policy):
-        call_time = datetime(2026, 6, 5, 12, 0, 0)
+        call_time = datetime(2026, 6, 5, 12, 0, 0, tzinfo=CST)
         assert policy.is_applicable(call_time) is False
 
     def test_not_applicable_at_22_59(self, policy):
-        call_time = datetime(2026, 6, 5, 22, 59, 59)
+        call_time = datetime(2026, 6, 5, 22, 59, 59, tzinfo=CST)
         assert policy.is_applicable(call_time) is False
 
 
@@ -63,6 +65,6 @@ class TestNightValleyCustomRange:
 
     def test_custom_hours(self):
         policy = NightValleyDiscount(start_hour=22, end_hour=6, reduction=Decimal("0.03"))
-        assert policy.is_applicable(datetime(2026, 6, 5, 22, 30)) is True
-        assert policy.is_applicable(datetime(2026, 6, 5, 21, 59)) is False
+        assert policy.is_applicable(datetime(2026, 6, 5, 22, 30, tzinfo=CST)) is True
+        assert policy.is_applicable(datetime(2026, 6, 5, 21, 59, tzinfo=CST)) is False
         assert policy.reduction_amount() == Money(Decimal("0.03"), "CNY")

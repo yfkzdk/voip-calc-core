@@ -1,7 +1,7 @@
 """Tests for RateCalculator domain service."""
 
 import pytest
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 
 from voip_calc_core.domain.call_context import CallContext
@@ -13,7 +13,7 @@ from voip_calc_core.domain.night_valley import NightValleyDiscount
 from voip_calc_core.domain.rate_calculator import RateCalculator
 
 
-UTC = timezone.utc
+CST = timezone(timedelta(hours=8))  # China Standard Time
 
 
 class TestRateCalculatorDaytime:
@@ -21,7 +21,7 @@ class TestRateCalculatorDaytime:
 
     @pytest.fixture
     def daytime(self):
-        return datetime(2026, 6, 5, 14, 30, 0, tzinfo=UTC)
+        return datetime(2026, 6, 5, 14, 30, 0, tzinfo=CST)
 
     @pytest.fixture
     def calc(self):
@@ -63,7 +63,7 @@ class TestRateCalculatorNightValley:
 
     @pytest.fixture
     def night_time(self):
-        return datetime(2026, 6, 6, 2, 0, 0, tzinfo=UTC)
+        return datetime(2026, 6, 6, 2, 0, 0, tzinfo=CST)
 
     @pytest.fixture
     def calc(self):
@@ -99,7 +99,7 @@ class TestRateCalculatorFloorAtZero:
         ctx = CallContext(
             caller="+8613800000001",
             callee="+14150000000",
-            call_time=datetime(2026, 6, 6, 2, 0, 0, tzinfo=UTC),
+            call_time=datetime(2026, 6, 6, 2, 0, 0, tzinfo=CST),
         )
         rate = calc.calculate(ctx, CustomerTier(TierEnum.VIP))
         assert rate == Money(Decimal("0.00"), "CNY")
@@ -112,7 +112,7 @@ class TestRateCalculatorFloorAtZero:
         ctx = CallContext(
             caller="+8613800000001",
             callee="+14150000000",
-            call_time=datetime(2026, 6, 6, 2, 0, 0, tzinfo=UTC),
+            call_time=datetime(2026, 6, 6, 2, 0, 0, tzinfo=CST),
         )
         rate = calc.calculate(ctx, CustomerTier(TierEnum.VIP))
         assert rate == Money(Decimal("0.00"), "CNY")
@@ -126,7 +126,7 @@ class TestRateCalculatorImmutability:
         ctx = CallContext(
             caller="+8613800000001",
             callee="+8613900000000",
-            call_time=datetime(2026, 6, 5, 14, 30, 0, tzinfo=UTC),
+            call_time=datetime(2026, 6, 5, 14, 30, 0, tzinfo=CST),
         )
         tier = CustomerTier(TierEnum.VIP)
         first = calc.calculate(ctx, tier)
@@ -146,7 +146,7 @@ class TestRateCalculatorBoundaryHours:
         ctx = CallContext(
             caller="+8613800000001",
             callee="+14150000000",
-            call_time=datetime(2026, 6, 5, 23, 0, 0, tzinfo=UTC),
+            call_time=datetime(2026, 6, 5, 23, 0, 0, tzinfo=CST),
         )
         rate = calc.calculate(ctx, CustomerTier(TierEnum.NORMAL))
         assert rate == Money(Decimal("0.03"), "CNY")
@@ -155,7 +155,7 @@ class TestRateCalculatorBoundaryHours:
         ctx = CallContext(
             caller="+8613800000001",
             callee="+14150000000",
-            call_time=datetime(2026, 6, 5, 5, 0, 0, tzinfo=UTC),
+            call_time=datetime(2026, 6, 5, 5, 0, 0, tzinfo=CST),
         )
         rate = calc.calculate(ctx, CustomerTier(TierEnum.NORMAL))
         assert rate == Money(Decimal("0.05"), "CNY")
@@ -176,7 +176,7 @@ class TestCallContextValidation:
         ctx = CallContext(
             caller="+8613800000001",
             callee="+14150000000",
-            call_time=datetime(2026, 6, 5, 14, 30, 0, tzinfo=UTC),
+            call_time=datetime(2026, 6, 5, 14, 30, 0, tzinfo=CST),
         )
         assert ctx.call_time.tzinfo is not None
 
@@ -190,7 +190,7 @@ class TestRateCalculatorCharge:
 
     @pytest.fixture
     def daytime(self):
-        return datetime(2026, 6, 5, 14, 30, 0, tzinfo=UTC)
+        return datetime(2026, 6, 5, 14, 30, 0, tzinfo=CST)
 
     @pytest.fixture
     def us_normal_ctx(self, daytime):
@@ -257,7 +257,7 @@ class TestRateCalculatorCharge:
 
     def test_night_valley_with_duration(self, calc):
         """Night US NORMAL = ¥0.03/min × 60s = ¥0.03"""
-        night = datetime(2026, 6, 6, 2, 0, 0, tzinfo=UTC)
+        night = datetime(2026, 6, 6, 2, 0, 0, tzinfo=CST)
         ctx = CallContext(
             caller="+8613800000001", callee="+14150000000", call_time=night
         )
@@ -268,7 +268,7 @@ class TestRateCalculatorCharge:
 
     def test_night_valley_large_duration(self, calc):
         """Night US NORMAL = ¥0.03/min × 600s = ¥0.30"""
-        night = datetime(2026, 6, 6, 2, 0, 0, tzinfo=UTC)
+        night = datetime(2026, 6, 6, 2, 0, 0, tzinfo=CST)
         ctx = CallContext(
             caller="+8613800000001", callee="+14150000000", call_time=night
         )

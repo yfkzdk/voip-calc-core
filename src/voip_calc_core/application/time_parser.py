@@ -17,6 +17,7 @@ _OFFSET_NO_COLON = re.compile(r"([+-]\d{2})(\d{2})")
 def parse_iso8601_to_utc(
     raw: str,
     *,
+    field_name: str = "datetime string",
     default_timezone: Optional[tzinfo] = None,
 ) -> datetime:
     """Parse an ISO-8601 string and return a timezone-aware UTC datetime.
@@ -26,6 +27,8 @@ def parse_iso8601_to_utc(
 
     Args:
         raw: ISO-8601 datetime string.
+        field_name: Human-readable name of the field being parsed, used in
+            error messages (e.g. ``"call_start_time"``).
         default_timezone: If provided, naive datetimes are assigned this
             timezone instead of being rejected (pyiso8601 convention).
 
@@ -34,7 +37,7 @@ def parse_iso8601_to_utc(
             and *default_timezone* is ``None``.
     """
     if not raw or not raw.strip():
-        raise ValueError("call_start_time must not be empty")
+        raise ValueError(f"{field_name} must not be empty")
 
     raw = raw.strip()
 
@@ -60,7 +63,7 @@ def parse_iso8601_to_utc(
             dt = dt.replace(tzinfo=default_timezone)
         else:
             raise ValueError(
-                "call_start_time must include a timezone offset (e.g. +08:00, -05:00, Z). "
+                f"{field_name} must include a timezone offset (e.g. +08:00, -05:00, Z). "
                 f"Got a naive datetime: {raw!r}"
             )
 

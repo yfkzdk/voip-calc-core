@@ -74,7 +74,7 @@ class TestRoutingAppServiceHappyPath:
         )
         response = await service.execute(
             build_request(
-                call_start_time="2026-06-06T02:00:00+00:00",  # 02:00 UTC is night
+                call_start_time="2026-06-06T02:00:00+08:00",  # 02:00 CST is night
             )
         )
         assert response.amount == Decimal("0.03")

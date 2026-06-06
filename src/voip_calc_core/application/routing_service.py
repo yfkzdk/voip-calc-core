@@ -64,7 +64,7 @@ class RoutingAppService:
         Raises:
             ValueError: if the ISO-8601 string is invalid or naive.
         """
-        call_time = parse_iso8601_to_utc(request.call_start_time)
+        call_time = parse_iso8601_to_utc(request.call_start_time, field_name="call_start_time")
         country = CountryCode.from_phone_number(request.callee)
         tier = await self._fetch_tier_safely(request.caller)
         ctx = CallContext(
@@ -73,7 +73,7 @@ class RoutingAppService:
             call_time=call_time,
         )
         money = self._calculator.calculate(ctx, tier)
-        night_valley = self._calculator.night_valley.is_applicable(call_time)
+        night_valley = self._calculator.is_night_valley(call_time)
 
         # Step 5: persist CDR (skipped when no UoW factory provided)
         if self._uow_factory is not None:
