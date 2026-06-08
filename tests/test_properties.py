@@ -92,15 +92,15 @@ class TestRateCalculatorProperties:
     def test_rate_never_negative(self, phone, tier, hour):
         ctx = _make_context(phone, hour)
         calc = RateCalculator()
-        rate = calc.calculate(ctx, tier)
+        rate = calc.calculateRate(ctx, tier)
         assert rate.amount >= 0
 
     @given(phone=phone_numbers, hour=hours)
     def test_vip_never_exceeds_normal(self, phone, hour):
         ctx = _make_context(phone, hour)
         calc = RateCalculator()
-        vip_rate = calc.calculate(ctx, CustomerTier(TierEnum.VIP))
-        normal_rate = calc.calculate(ctx, CustomerTier(TierEnum.NORMAL))
+        vip_rate = calc.calculateRate(ctx, CustomerTier(TierEnum.VIP))
+        normal_rate = calc.calculateRate(ctx, CustomerTier(TierEnum.NORMAL))
         assert vip_rate.amount <= normal_rate.amount
 
     @given(phone=phone_numbers, tier=tiers)
@@ -108,8 +108,8 @@ class TestRateCalculatorProperties:
         calc = RateCalculator()
         night_ctx = _make_context(phone, 2)  # 02:00 CST
         day_ctx = _make_context(phone, 14)   # 14:00 CST
-        night_rate = calc.calculate(night_ctx, tier)
-        day_rate = calc.calculate(day_ctx, tier)
+        night_rate = calc.calculateRate(night_ctx, tier)
+        day_rate = calc.calculateRate(day_ctx, tier)
         assert night_rate.amount <= day_rate.amount
 
     @given(phone=phone_numbers, tier=tiers, hour=hours, seconds=durations_seconds)

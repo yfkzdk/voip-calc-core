@@ -28,7 +28,7 @@ class RateCalculator:
         """Return True if *call_time* falls within the night valley window."""
         return self._night_valley.is_applicable(call_time)
 
-    def calculate(
+    def calculateRate(
         self, context: CallContext, customer_tier: CustomerTier
     ) -> Money:
         country = CountryCode.from_phone_number(context.callee)
@@ -64,7 +64,7 @@ class RateCalculator:
         if billing is None:
             billing = BillingIncrement.PER_MINUTE
 
-        per_minute_rate = self.calculate(context, customer_tier)
+        per_minute_rate = self.calculateRate(context, customer_tier)
         chargeable_seconds = billing.chargeable_duration(duration.seconds)
         chargeable_minutes = Decimal(chargeable_seconds) / Decimal("60")
         raw_charge = per_minute_rate * chargeable_minutes

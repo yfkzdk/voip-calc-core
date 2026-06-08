@@ -72,7 +72,7 @@ class RoutingAppService:
             callee=request.callee,
             call_time=call_time,
         )
-        money = self._calculator.calculate(ctx, tier)
+        money = self._calculator.calculateRate(ctx, tier)
         night_valley = self._calculator.is_night_valley(call_time)
 
         # Step 5: persist CDR (skipped when no UoW factory provided)
