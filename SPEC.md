@@ -232,7 +232,7 @@ billing.chargeable_duration(actual_seconds)
 ### 8.1 每分钟单价
 
 ```
-calculator.calculate(context, customer_tier)
+calculator.calculateRate(context, customer_tier)
   前置: context.callee 以 "+" 开头
         context.call_time.tzinfo is not None
   后置: R(t, cc, tier) = max(0, R_base(cc) * D(tier) - reduction)
@@ -303,7 +303,7 @@ service.execute(request)
     2. _fetch_tier_safely(request.caller) → tier
        若 fetcher 不可用或断路器开路 → CustomerTier(NORMAL) (降级)
     3. CallContext(caller, callee, call_time) → ctx
-    4. calculator.calculate(ctx, tier) → money
+    4. calculator.calculateRate(ctx, tier) → money
        calculator.is_night_valley(call_time) → night_valley
     5. 若提供了 UoW factory:
           RatedCall.create(...) → rated_call

@@ -103,11 +103,31 @@ CallContext {
 
 决策权衡：`frozen=True` 不可变——通话上下文一旦创建不可被计算链上任何环节修改，防止副作用。输入模型与计算逻辑解耦：未来 `CallContext` 扩展（如 `call_duration`、`quality_score`）不影响 `RateCalculator` 接口，反之亦然。
 
-### 2.6 RateCalculator — 费率计算器 (领域服务)
+### 2.6 Duration — 通话时长值对象
+
+```
+Duration { seconds: int }
+```
+
+- 不可变。封装通话时长，单位秒。
+- 非负校验：构造时拒绝负值。
+
+### 2.7 BillingIncrement — 计费增量值对象
+
+```
+BillingIncrement { initial_seconds: int, subsequent_seconds: int }
+```
+
+- 不可变。将实际通话时长转换为计费时长（电信行业 ceiling 语义）。
+- 常用模式：60/60（整分钟舍入）、6/6（6秒脉冲）、1/1（逐秒计费）、30/6（首30秒 + 6秒脉冲）。
+- O(1) 整数运算，无循环。
+
+### 2.8 RateCalculator — 费率计算器 (领域服务)
 
 ```
 RateCalculator:
-    calculate(context: CallContext, tier: CustomerTier) -> Money
+    calculateRate(context: CallContext, tier: CustomerTier) -> Money
+    calculate_charge(context, tier, duration, billing=None) -> Money
 ```
 
 - 纯粹、无状态、无副作用。
@@ -127,7 +147,7 @@ RateCalculator:
 
 ### ADR-2: Python + Decimal 精确运算
 
-Python 3.10+。Decimal 类型避免浮点精度丢失。不使用 float 表示金额。
+Python 3.9+。Decimal 类型避免浮点精度丢失。不使用 float 表示金额。
 
 ### ADR-3: 三层规则叠加而非策略模式
 
@@ -157,10 +177,12 @@ voip-calc-core/
 │   └── domain/
 │       ├── __init__.py
 │       ├── money.py              # Money 值对象
-│       ├── country_code.py       # CountryCode 值对象
+│       ├── country_code.py       # CountryCode 值对象 + Trie
 │       ├── customer_tier.py      # CustomerTier 值对象
 │       ├── night_valley.py       # NightValleyDiscount 值对象
 │       ├── call_context.py       # CallContext DTO
+│       ├── duration.py           # Duration 值对象
+│       ├── billing_increment.py  # BillingIncrement 值对象
 │       └── rate_calculator.py    # RateCalculator 领域服务
 │   └── application/
 │       ├── __init__.py
@@ -180,6 +202,10 @@ voip-calc-core/
 │   ├── test_customer_tier.py
 │   ├── test_night_valley.py
 │   ├── test_rate_calculator.py
+│   ├── test_duration.py
+│   ├── test_billing_increment.py
+│   ├── test_properties.py        # 属性测试 (Hypothesis)
+│   ├── mutate.py                 # 变异测试
 │   ├── test_time_parser.py
 │   ├── test_circuit_breaker.py
 │   ├── test_application_dto.py
@@ -190,6 +216,7 @@ voip-calc-core/
 ├── DESIGN.md
 ├── APPLICATION_DESIGN.md
 ├── PERSISTENCE_DESIGN.md
+├── SPEC.md
 ├── PROMPTS.md
 └── README.md
 ```

@@ -412,7 +412,7 @@ caller ──►[2] breaker.call(fetch_tier)──► VIP/NORMAL ◄─┤
                                                        │
 callee ──►[3] CallContext(caller, callee, time)────────┤
                                                        │
-         ──►[4] RateCalculator.calculate(ctx, tier)────┤
+         ──►[4] RateCalculator.calculateRate(ctx, tier)────┤
                                                        │
          ──►[5] 幂等预检 → repo.save(RatedCall(...)) ◄──┘
                uow.commit()
