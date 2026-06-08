@@ -254,7 +254,7 @@ calculator.calculateRate(context, customer_tier)
 calculator.calculate_charge(context, customer_tier, duration, billing=None)
   前置: duration.seconds >= 0
         billing 默认为 BillingIncrement.PER_MINUTE
-  后置: 1. per_minute_rate = calculate(context, customer_tier)
+  后置: 1. per_minute_rate = calculateRate(context, customer_tier)
         2. chargeable_seconds = billing.chargeable_duration(duration.seconds)
         3. chargeable_minutes = chargeable_seconds / 60  (Decimal 除法)
         4. raw_charge = per_minute_rate * chargeable_minutes

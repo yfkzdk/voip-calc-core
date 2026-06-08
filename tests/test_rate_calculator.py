@@ -330,7 +330,7 @@ class TestRateCalculatorCharge:
     # ── backward compatibility ──────────────────────────────────
 
     def test_calculate_unchanged(self, calc, us_normal_ctx, normal_tier):
-        """calculate() still returns per-minute rate, unmodified."""
+        """calculateRate() still returns per-minute rate, unmodified."""
         rate = calc.calculateRate(us_normal_ctx, normal_tier)
         assert rate == Money(Decimal("0.05"), "CNY")
 

@@ -51,7 +51,7 @@
 
 **推理**：客户身份是外部系统（用户账户系统）解析的结果，不是通话本身的属性。
 在 DDD 中，领域服务接收已解析的领域对象而非原始字符串。
-因此 `calculate(context, customer_tier)` 而非 `calculate(context)` 隐含从 caller 推断身份。
+因此 `calculateRate(context, customer_tier)` 而非 `calculateRate(context)` 隐含从 caller 推断身份。
 
 **替代方案**：在 CallContext 中携带 customer_tier。被拒绝，因为这模糊了应用层和领域层的边界。
 

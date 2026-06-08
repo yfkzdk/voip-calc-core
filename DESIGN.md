@@ -73,7 +73,7 @@ TierEnum { VIP, NORMAL }
   - VIP    → 0.9 (9折)
   - NORMAL → 1.0 (无折扣)
 
-决策权衡：`CustomerTier` 作为独立参数传入 `calculate()`，而非作为 `CallContext` 字段。原因是 tier 由外部账户系统（CustomerProfileFetcher 端口）反查得出，不是通话本身的属性。将其塞入 CallContext 会模糊应用层（反查与降级）和领域层（纯计算）之间的边界，导致测试时需要构造假账户数据来满足 CallContext。
+决策权衡：`CustomerTier` 作为独立参数传入 `calculateRate()`，而非作为 `CallContext` 字段。原因是 tier 由外部账户系统（CustomerProfileFetcher 端口）反查得出，不是通话本身的属性。将其塞入 CallContext 会模糊应用层（反查与降级）和领域层（纯计算）之间的边界，导致测试时需要构造假账户数据来满足 CallContext。
 
 ### 2.4 NightValleyDiscount — 夜间低谷折扣值对象
 

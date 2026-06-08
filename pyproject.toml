@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "voip-calc-core"
+version = "2.0.0"
+description = "Cross-border VoIP rate calculation engine — DDD architecture edition"
+requires-python = ">=3.9"
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
