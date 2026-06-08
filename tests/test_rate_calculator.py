@@ -206,36 +206,26 @@ class TestRateCalculatorCharge:
 
     def test_exact_one_minute(self, calc, us_normal_ctx, normal_tier):
         """US NORMAL = ¥0.05/min × 60s (exact 1 min) = ¥0.05"""
-        charge = calc.calculate_charge(
-            us_normal_ctx, normal_tier, Duration(60)
-        )
+        charge = calc.calculate_charge(us_normal_ctx, Duration(60), normal_tier)
         assert charge == Money(Decimal("0.05"), "CNY")
 
     def test_exact_three_minutes(self, calc, us_normal_ctx, normal_tier):
         """US NORMAL = ¥0.05/min × 180s = ¥0.15"""
-        charge = calc.calculate_charge(
-            us_normal_ctx, normal_tier, Duration(180)
-        )
+        charge = calc.calculate_charge(us_normal_ctx, Duration(180), normal_tier)
         assert charge == Money(Decimal("0.15"), "CNY")
 
     def test_partial_minute_ceil(self, calc, us_normal_ctx, normal_tier):
         """32s → 60s chargeable → ¥0.05"""
-        charge = calc.calculate_charge(
-            us_normal_ctx, normal_tier, Duration(32)
-        )
+        charge = calc.calculate_charge(us_normal_ctx, Duration(32), normal_tier)
         assert charge == Money(Decimal("0.05"), "CNY")
 
     def test_over_one_minute_ceil(self, calc, us_normal_ctx, normal_tier):
         """61s → 120s chargeable → ¥0.10"""
-        charge = calc.calculate_charge(
-            us_normal_ctx, normal_tier, Duration(61)
-        )
+        charge = calc.calculate_charge(us_normal_ctx, Duration(61), normal_tier)
         assert charge == Money(Decimal("0.10"), "CNY")
 
     def test_zero_duration(self, calc, us_normal_ctx, normal_tier):
-        charge = calc.calculate_charge(
-            us_normal_ctx, normal_tier, Duration(0)
-        )
+        charge = calc.calculate_charge(us_normal_ctx, Duration(0), normal_tier)
         assert charge == Money(Decimal("0.00"), "CNY")
 
     # ── rounding to cents ───────────────────────────────────────
@@ -243,14 +233,14 @@ class TestRateCalculatorCharge:
     def test_rounding_half_up(self, calc, us_normal_ctx):
         """US VIP = ¥0.045/min × 90s (2 min chargeable) = ¥0.09"""
         vip = CustomerTier(TierEnum.VIP)
-        charge = calc.calculate_charge(us_normal_ctx, vip, Duration(90))
+        charge = calc.calculate_charge(us_normal_ctx, Duration(90), vip)
         # 90s → ceil to 2 min → ¥0.045 × 2 = ¥0.09
         assert charge == Money(Decimal("0.09"), "CNY")
 
     def test_rounding_sub_cent(self, calc, us_normal_ctx):
         """US VIP = ¥0.045/min × 32s (1 min ceil) = ¥0.045 → rounds to ¥0.05"""
         vip = CustomerTier(TierEnum.VIP)
-        charge = calc.calculate_charge(us_normal_ctx, vip, Duration(32))
+        charge = calc.calculate_charge(us_normal_ctx, Duration(32), vip)
         assert charge == Money(Decimal("0.05"), "CNY")
 
     # ── night valley + duration ─────────────────────────────────
@@ -262,7 +252,7 @@ class TestRateCalculatorCharge:
             caller="+8613800000001", callee="+14150000000", call_time=night
         )
         charge = calc.calculate_charge(
-            ctx, CustomerTier(TierEnum.NORMAL), Duration(60)
+            ctx, Duration(60), CustomerTier(TierEnum.NORMAL)
         )
         assert charge == Money(Decimal("0.03"), "CNY")
 
@@ -273,7 +263,7 @@ class TestRateCalculatorCharge:
             caller="+8613800000001", callee="+14150000000", call_time=night
         )
         charge = calc.calculate_charge(
-            ctx, CustomerTier(TierEnum.NORMAL), Duration(600)
+            ctx, Duration(600), CustomerTier(TierEnum.NORMAL)
         )
         assert charge == Money(Decimal("0.30"), "CNY")
 
@@ -283,8 +273,8 @@ class TestRateCalculatorCharge:
         """US NORMAL ¥0.05/min, 6/6 pulse, 10s → 12s chargeable → ¥0.01"""
         charge = calc.calculate_charge(
             us_normal_ctx,
-            normal_tier,
             Duration(10),
+            normal_tier,
             billing=BillingIncrement.PER_6_SECONDS,
         )
         # 12s / 60s × ¥0.05 = ¥0.01
@@ -294,8 +284,8 @@ class TestRateCalculatorCharge:
         """30s → 30s chargeable (exact 5 pulses) → ¥0.025 → rounds to ¥0.03"""
         charge = calc.calculate_charge(
             us_normal_ctx,
-            normal_tier,
             Duration(30),
+            normal_tier,
             billing=BillingIncrement.PER_6_SECONDS,
         )
         # 30s / 60s × ¥0.05 = ¥0.025 → ROUND_HALF_UP → ¥0.03
@@ -307,8 +297,8 @@ class TestRateCalculatorCharge:
         """US NORMAL ¥0.05/min, 1/1 pulse, 30s → 30s chargeable → ¥0.025 → ¥0.03"""
         charge = calc.calculate_charge(
             us_normal_ctx,
-            normal_tier,
             Duration(30),
+            normal_tier,
             billing=BillingIncrement.PER_SECOND,
         )
         # 30s / 60s × ¥0.05 = ¥0.025 → ROUND_HALF_UP → ¥0.03
@@ -320,8 +310,8 @@ class TestRateCalculatorCharge:
         """30/6 pulse, 35s → 30+6s = 36s chargeable → ¥0.03"""
         charge = calc.calculate_charge(
             us_normal_ctx,
-            normal_tier,
             Duration(35),
+            normal_tier,
             billing=BillingIncrement(initial_seconds=30, subsequent_seconds=6),
         )
         # 36s / 60s × ¥0.05 = ¥0.03
@@ -336,11 +326,9 @@ class TestRateCalculatorCharge:
 
     def test_default_billing_is_per_minute(self, calc, us_normal_ctx, normal_tier):
         """Omitting billing defaults to 60/60."""
-        charge_default = calc.calculate_charge(
-            us_normal_ctx, normal_tier, Duration(61)
-        )
+        charge_default = calc.calculate_charge(us_normal_ctx, Duration(61), normal_tier)
         charge_explicit = calc.calculate_charge(
-            us_normal_ctx, normal_tier, Duration(61),
+            us_normal_ctx, Duration(61), normal_tier,
             billing=BillingIncrement.PER_MINUTE,
         )
         assert charge_default == charge_explicit

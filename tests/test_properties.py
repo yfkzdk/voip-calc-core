@@ -116,8 +116,8 @@ class TestRateCalculatorProperties:
     def test_charge_grows_with_duration(self, phone, tier, hour, seconds):
         ctx = _make_context(phone, hour)
         calc = RateCalculator()
-        charge_1 = calc.calculate_charge(ctx, tier, Duration(seconds))
-        charge_2 = calc.calculate_charge(ctx, tier, Duration(seconds * 2))
+        charge_1 = calc.calculate_charge(ctx, Duration(seconds), tier)
+        charge_2 = calc.calculate_charge(ctx, Duration(seconds * 2), tier)
         # 2× duration should produce >= charge (not strictly > because of floor at 0)
         assert charge_2.amount >= charge_1.amount
 

@@ -29,12 +29,18 @@ class RateCalculator:
         return self._night_valley.is_applicable(call_time)
 
     def calculateRate(
-        self, context: CallContext, customer_tier: CustomerTier
+        self, context: CallContext, customer_tier: Optional[CustomerTier] = None
     ) -> Money:
         country = CountryCode.from_phone_number(context.callee)
         base_rate = country.base_rate()
 
-        discounted = base_rate * customer_tier.discount_rate()
+        tier = customer_tier if customer_tier is not None else context.tier
+        if tier is None:
+            raise ValueError(
+                "customer_tier must be provided either as an argument "
+                "or via context.tier"
+            )
+        discounted = base_rate * tier.discount_rate()
 
         if self._night_valley.is_applicable(context.call_time):
             result = discounted - self._night_valley.reduction_amount()
@@ -46,8 +52,8 @@ class RateCalculator:
     def calculate_charge(
         self,
         context: CallContext,
-        customer_tier: CustomerTier,
         duration: Duration,
+        customer_tier: Optional[CustomerTier] = None,
         billing: Optional[BillingIncrement] = None,
     ) -> Money:
         """Return the **total charge** for a call of *duration* seconds.

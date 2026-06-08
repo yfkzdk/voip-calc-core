@@ -251,7 +251,7 @@ calculator.calculateRate(context, customer_tier)
 ### 8.2 总话费
 
 ```
-calculator.calculate_charge(context, customer_tier, duration, billing=None)
+calculator.calculate_charge(context, duration, customer_tier=None, billing=None)
   前置: duration.seconds >= 0
         billing 默认为 BillingIncrement.PER_MINUTE
   后置: 1. per_minute_rate = calculateRate(context, customer_tier)
@@ -262,8 +262,8 @@ calculator.calculate_charge(context, customer_tier, duration, billing=None)
   
   不变量:
     (1) result.amount >= 0
-    (2) calculate_charge(context, tier, Duration(0), billing) == Money(0, CNY)
-    (3) 对任一 billing: calculate_charge(context, tier, d1) <= calculate_charge(context, tier, d2)
+    (2) calculate_charge(context, Duration(0), tier, billing) == Money(0, CNY)
+    (3) 对任一 billing: calculate_charge(context, d1, tier) <= calculate_charge(context, d2, tier)
         当 d1.seconds <= d2.seconds  (单调递增)
 ```
 

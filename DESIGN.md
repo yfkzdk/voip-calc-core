@@ -126,8 +126,8 @@ BillingIncrement { initial_seconds: int, subsequent_seconds: int }
 
 ```
 RateCalculator:
-    calculateRate(context: CallContext, tier: CustomerTier) -> Money
-    calculate_charge(context, tier, duration, billing=None) -> Money
+    calculateRate(context: CallContext, tier: CustomerTier = None) -> Money
+    calculate_charge(context, duration, tier=None, billing=None) -> Money
 ```
 
 - 纯粹、无状态、无副作用。

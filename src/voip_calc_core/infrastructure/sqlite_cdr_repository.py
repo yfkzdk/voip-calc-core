@@ -48,8 +48,8 @@ class SqliteCdrRepository(CdrRepository):
             """INSERT OR IGNORE INTO rated_calls
                (cdr_id, caller, callee, call_start_time, country_code,
                 tier, night_valley_applied, amount, currency,
-                idempotency_key, rated_at, extra_fields)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                idempotency_key, rated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
                 rated_call.cdr_id,
                 rated_call.caller,
@@ -62,7 +62,6 @@ class SqliteCdrRepository(CdrRepository):
                 rated_call.currency,
                 rated_call.idempotency_key,
                 _serialize_dt(rated_call.rated_at),
-                "{}",
             ),
         )
 
@@ -145,8 +144,7 @@ CREATE TABLE IF NOT EXISTS rated_calls (
     amount            TEXT NOT NULL,
     currency          TEXT NOT NULL,
     idempotency_key   TEXT NOT NULL UNIQUE,
-    rated_at          TEXT NOT NULL,
-    extra_fields      TEXT DEFAULT '{}'
+    rated_at          TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_rated_calls_caller ON rated_calls(caller);
